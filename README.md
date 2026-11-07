@@ -10,11 +10,8 @@
 **A quiet terminal front end for Claude Code**
 
 [![Rust](https://img.shields.io/badge/rust-2024-b497ff?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![ratatui](https://img.shields.io/badge/ratatui-0.29-89dceb?style=flat-square)](https://ratatui.rs)
 [![Claude Code](https://img.shields.io/badge/engine-Claude%20Code-d0a9ff?style=flat-square)](https://claude.com/claude-code)
 [![kitty](https://img.shields.io/badge/terminal-kitty-a6e3a1?style=flat-square)](https://sw.kovidgoyal.net/kitty)
-[![platform](https://img.shields.io/badge/platform-linux-f38ba8?style=flat-square&logo=linux&logoColor=white)](#)
-[![status](https://img.shields.io/badge/status-private-3a2b52?style=flat-square)](#)
 
 <img src="assets/demo.gif" width="860">
 
