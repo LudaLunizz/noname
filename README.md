@@ -38,7 +38,7 @@ curl -fsSL https://github.com/Silvertree2010/noname/releases/latest/download/ins
 irm https://github.com/Silvertree2010/noname/releases/latest/download/install.ps1 | iex
 ```
 
-Also: Homebrew (`brew install Silvertree2010/noname/noname`), Scoop, `.deb` and `.rpm` from the [releases](https://github.com/Silvertree2010/noname/releases/latest), or `cargo install --git https://github.com/Silvertree2010/noname`. AUR is coming. Needs a logged-in [Claude Code](https://claude.com/claude-code).
+Also: Homebrew (`brew tap Silvertree2010/noname && brew trust Silvertree2010/noname && brew install noname`), [Scoop](https://github.com/Silvertree2010/scoop-noname), `.deb` and `.rpm` from the [releases](https://github.com/Silvertree2010/noname/releases/latest), or `cargo install --git https://github.com/Silvertree2010/noname`. AUR is coming. Needs a logged-in [Claude Code](https://claude.com/claude-code).
 
 ## Usage
 

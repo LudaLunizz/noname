@@ -92,7 +92,21 @@ jobs:
           cd ..
           packaging/render.sh "${TAG#v}" dist/SHA256SUMS dist/packaging
           tar -C dist -czf dist/packaging.tar.gz packaging
-          rm -rf dist/packaging
+      - name: update tap and bucket
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        if: env.TAP_TOKEN != ''
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for r in homebrew-noname:homebrew/noname.rb:Formula scoop-noname:scoop/noname.json:bucket; do
+            IFS=: read -r repo file dir <<< "$r"
+            git clone -q "https://x-access-token:$TAP_TOKEN@github.com/Silvertree2010/$repo.git" "/tmp/$repo"
+            cp "dist/packaging/$file" "/tmp/$repo/$dir/"
+            git -C "/tmp/$repo" commit -qam "noname $TAG" && git -C "/tmp/$repo" push -q || true
+          done
+      - name: clean up
+        run: rm -rf dist/packaging
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
