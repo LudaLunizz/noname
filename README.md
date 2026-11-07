@@ -12,6 +12,7 @@
 [![Rust](https://img.shields.io/badge/rust-2024-b497ff?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Claude Code](https://img.shields.io/badge/engine-Claude%20Code-d0a9ff?style=flat-square)](https://claude.com/claude-code)
 [![kitty](https://img.shields.io/badge/terminal-kitty-a6e3a1?style=flat-square)](https://sw.kovidgoyal.net/kitty)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-f38ba8?style=flat-square)](LICENSE)
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.gif"><source media="(prefers-color-scheme: light)" srcset="assets/demo-light.gif"><img src="assets/demo-dark.gif" width="860"></picture>
 
@@ -140,6 +141,8 @@ kitty ── noname ──┬── claude -p  (stream-json, control protocol)
 noname starts `claude` in stream-json mode with partial messages, renders every event with ratatui and answers permission requests over the control protocol. Rewind uses Claude Code's file checkpoints and `--resume-session-at`. Signal handling, process groups and a parent death signal make sure nothing outlives the window.
 
 ## Licenses
+
+noname is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 
 All Rust dependencies are permissive (MIT, Apache-2.0, Zlib, Unlicense, BSL-1.0, Unicode-3.0).
 
