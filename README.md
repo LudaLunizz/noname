@@ -55,25 +55,32 @@ It is built for kitty with a transparent, blurred background and never paints a 
 
 ## Install
 
-```sh
-git clone https://github.com/Silvertree2010/noname
-cd noname
-cargo install --path .
-```
+| | |
+|---|---|
+| Linux, macOS | `curl -fsSL https://github.com/Silvertree2010/noname/releases/latest/download/install.sh \| sh` |
+| Windows | `irm https://github.com/Silvertree2010/noname/releases/latest/download/install.ps1 \| iex` |
+| Arch (AUR) | `paru -S noname-bin`, or `noname` to build from source, or `noname-git` |
+| Homebrew | `brew install Silvertree2010/noname/noname` |
+| Scoop | `scoop bucket add noname https://github.com/Silvertree2010/scoop-noname` then `scoop install noname` |
+| Debian, Ubuntu | `.deb` from the [latest release](https://github.com/Silvertree2010/noname/releases/latest) |
+| Fedora, openSUSE | `.rpm` from the [latest release](https://github.com/Silvertree2010/noname/releases/latest) |
+| Cargo | `cargo install --git https://github.com/Silvertree2010/noname` |
+
+Prebuilt binaries for Linux (x86_64, arm64, static), macOS (Intel, Apple silicon) and Windows (x64, arm64) are on the [releases page](https://github.com/Silvertree2010/noname/releases).
 
 **Requirements**
 
 - a logged-in [Claude Code](https://claude.com/claude-code) (`claude`) on your `PATH`
-- Rust 1.85 or newer
+- Rust 1.85 or newer, only when building from source
 - kitty is recommended, any truecolor terminal works
 
 **Windows**
 
-Works in PowerShell inside Windows Terminal. Install Rust from [rustup.rs](https://rustup.rs), then run the same three commands in PowerShell. noname finds `claude.exe` from the native installer as well as `claude.cmd` from npm. Child processes run in a job object, so closing the tab also ends Claude and its MCP servers. Only the built-in backgrounds are available.
+Works in PowerShell inside Windows Terminal. noname finds `claude.exe` from the native installer as well as `claude.cmd` from npm. Child processes run in a job object, so closing the tab also ends Claude and its MCP servers. Only the built-in backgrounds are available.
 
 **Updates**
 
-noname updates itself. At most every six hours it fetches the repository in the background, builds the new version with cargo and replaces its own binary; a line in the chat tells you to restart. Builds with uncommitted changes and builds newer than GitHub are never replaced. Turn it off in `/noname` or with `NONAME_NO_UPDATE=1`. Needs `git` and `cargo`, and access to the repository.
+noname updates itself. At most every six hours it checks GitHub in the background, installs the new version over its own binary and tells you in the chat to restart. Binaries from the install scripts or the releases page download the next release; builds from source fetch the repository and rebuild with cargo, and are never replaced while they have uncommitted changes or are newer than GitHub. Installs from pacman, Homebrew, Scoop, `.deb` or `.rpm` leave updates to the package manager. Turn it off in `/noname` or with `NONAME_NO_UPDATE=1`.
 
 ## Usage
 
