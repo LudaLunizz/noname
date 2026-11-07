@@ -33,12 +33,14 @@ const NAMES: &[(&str, &str)] = &[
     ("terminal-rain", "rain"),
     ("thunder", "rain"),
     ("globe", "globe"),
+    ("snow", "snow"),
+    ("snowfall", "snow"),
     ("stars", "stars"),
     ("starfield", "stars"),
 ];
 
-pub const NATIVE: [&str; 3] = ["stars", "matrix", "rain"];
-pub const PICK: [&str; 13] = ["stars", "matrix", "rain", "cava", "lavat", "pipes.sh", "asciiquarium", "cbonsai", "unimatrix", "neo-matrix", "tty-clock", "weathr", "globe"];
+pub const NATIVE: [&str; 4] = ["stars", "matrix", "rain", "snow"];
+pub const PICK: [&str; 14] = ["stars", "matrix", "rain", "snow", "cava", "lavat", "pipes.sh", "asciiquarium", "cbonsai", "unimatrix", "neo-matrix", "tty-clock", "weathr", "globe"];
 
 pub fn avail() -> Vec<&'static str> {
     let mut v = vec!["off"];
@@ -107,7 +109,7 @@ pub fn which(b: &str) -> Option<std::path::PathBuf> {
     ds.into_iter().map(|d| std::path::Path::new(&d).join(b)).find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
-pub const LIST: &str = "stars matrix rain cava lavat pipes asciiquarium cbonsai unimatrix neo-matrix tty-clock weathr globe";
+pub const LIST: &str = "stars matrix rain snow cava lavat pipes asciiquarium cbonsai unimatrix neo-matrix tty-clock weathr globe";
 
 pub fn canon(s: &str) -> Option<&'static str> {
     let s = s.trim().to_lowercase();
@@ -152,6 +154,7 @@ pub struct Bg {
     sz: (u16, u16),
     lt: u64,
     fl: Option<(u64, Vec<(u16, u16)>)>,
+    sn: std::collections::HashMap<(u16, u16), u8>,
 }
 
 fn ws(r: u16, c: u16) -> libc::winsize {
@@ -161,7 +164,7 @@ fn ws(r: u16, c: u16) -> libc::winsize {
 impl Bg {
     pub fn new(name: &'static str, rows: u16, cols: u16) -> io::Result<Bg> {
         if NATIVE.contains(&name) {
-            return Ok(Bg { name, pr: None, ds: vec![], sz: (0, 0), lt: 0, fl: None });
+            return Ok(Bg { name, pr: None, ds: vec![], sz: (0, 0), lt: 0, fl: None, sn: Default::default() });
         }
         let (mut m, mut s) = (0, 0);
         let w = ws(rows, cols);
@@ -204,7 +207,7 @@ impl Bg {
                 }
             }
         });
-        Ok(Bg { name, pr: Some(Pr { ch, m, ps, sz: (rows, cols) }), ds: vec![], sz: (0, 0), lt: 0, fl: None })
+        Ok(Bg { name, pr: Some(Pr { ch, m, ps, sz: (rows, cols) }), ds: vec![], sz: (0, 0), lt: 0, fl: None, sn: Default::default() })
     }
 
     fn resize(&mut self, r: u16, c: u16) {
@@ -228,6 +231,10 @@ impl Bg {
         let occ: Vec<bool> = (0..a.height).flat_map(|y| (0..a.width).map(move |x| (x, y))).map(|(x, y)| b[(x, y)].symbol() != " " || b[(x, y)].bg != Color::Reset).collect();
         let at = |x: i32, y: u16| x >= 0 && (x as u16) < a.width && occ[y as usize * a.width as usize + x as usize];
         let free = |_: &Buffer, x: u16, y: u16| -> bool { !at(x as i32, y) && !at(x as i32 - 1, y) && !at(x as i32 + 1, y) };
+        if self.name == "snow" {
+            self.snow(b, t, &occ);
+            return;
+        }
         if self.name == "matrix" || self.name == "rain" {
             let dt = if self.lt == 0 { 1.0 } else { (t.saturating_sub(self.lt)).min(10) as f32 };
             self.lt = t;
@@ -238,7 +245,7 @@ impl Bg {
             }
             let (w, h) = (a.width, a.height);
             let base = Color::Rgb(0x1a, 0x14, 0x26);
-            let mut put = |b: &mut Buffer, x: i32, y: i32, ch: &str, c: Color| {
+            let put = |b: &mut Buffer, x: i32, y: i32, ch: &str, c: Color| {
                 if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
                     return;
                 }
@@ -367,6 +374,115 @@ impl Bg {
                         }
                         b[(x, y)].set_symbol(&s).set_style(Style::new().fg(dim(vc(col), 0.12)));
                     }
+                }
+            }
+        }
+    }
+}
+
+fn month() -> i32 {
+    unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        tm.tm_mon
+    }
+}
+
+impl Bg {
+    fn snow(&mut self, b: &mut Buffer, t: u64, occ: &[bool]) {
+        let a = b.area;
+        let (w, h) = (a.width, a.height);
+        let dt = if self.lt == 0 { 1.0 } else { (t.saturating_sub(self.lt)).min(10) as f32 };
+        self.lt = t;
+        if self.sz != (w, h) {
+            self.sz = (w, h);
+            self.ds.clear();
+            self.sn.clear();
+        }
+        let base = Color::Rgb(0x1a, 0x14, 0x26);
+        let oc = |x: i32, y: i32| x >= 0 && y >= 0 && x < w as i32 && y < h as i32 && occ[y as usize * w as usize + x as usize];
+        let sn = &mut self.sn;
+        let mut fall: Vec<(u16, u16)> = vec![];
+        sn.retain(|&(x, y), _| {
+            let ok = !oc(x as i32, y as i32) && (y + 1 >= h || oc(x as i32, y as i32 + 1));
+            if !ok {
+                fall.push((x, y));
+            }
+            ok
+        });
+        for (x, y) in fall {
+            let k = hsh(t, x as u64 * 31 + y as u64);
+            self.ds.push(Dr { x, y: y as f32, v: 0.18 + (k % 40) as f32 / 200.0, n: 0, s: k });
+        }
+        let want = (w as usize * h as usize / 110).max(10);
+        while self.ds.len() < want {
+            let k = hsh(t ^ 0x5eed, self.ds.len() as u64 * 7919 + 3);
+            self.ds.push(Dr { x: (k % w as u64) as u16, y: -(((k >> 8) % h as u64) as f32), v: 0.08 + ((k >> 16) % 100) as f32 / 900.0, n: 0, s: k });
+        }
+        let mut keep = vec![];
+        for mut d in std::mem::take(&mut self.ds) {
+            let ny = d.y + d.v * dt;
+            let drift = ((t as f32 * 0.03 + (d.s % 100) as f32).sin() * 0.6).round() as i32;
+            let x = (d.x as i32 + if hsh(d.s, t / 20) % 9 == 0 { drift } else { 0 }).clamp(0, w as i32 - 1);
+            d.x = x as u16;
+            let (y0, y1) = (d.y.floor() as i32, ny.floor() as i32);
+            let mut landed = false;
+            for y in y0.max(0)..=y1 {
+                if y >= h as i32 {
+                    break;
+                }
+                if oc(x, y) {
+                    break;
+                }
+                let floor = y + 1 >= h as i32 || oc(x, y + 1);
+                if floor {
+                    let e = sn.entry((x as u16, y as u16)).or_insert(0);
+                    if *e < 4 {
+                        *e += 1;
+                    }
+                    landed = true;
+                    break;
+                }
+            }
+            if landed {
+                continue;
+            }
+            d.y = ny;
+            if d.y < h as f32 + 1.0 {
+                keep.push(d);
+            }
+        }
+        self.ds = keep;
+        let fc = grad(&[base, crate::pal::WH], 0.34);
+        for d in &self.ds {
+            let (x, y) = (d.x as i32, d.y.floor() as i32);
+            if y < 0 || y >= h as i32 || oc(x, y) || oc(x - 1, y) || oc(x + 1, y) {
+                continue;
+            }
+            b[(x as u16, y as u16)].set_symbol(if d.s % 3 == 0 { "*" } else { "." }).set_style(Style::new().fg(fc));
+        }
+        let sc = grad(&[base, crate::pal::WH], 0.62);
+        for (&(x, y), &l) in self.sn.iter() {
+            if oc(x as i32, y as i32) {
+                continue;
+            }
+            b[(x, y)].set_symbol(["▁", "▂", "▃", "▄"][(l.max(1) - 1) as usize]).set_style(Style::new().fg(sc));
+        }
+        if matches!(month(), 10 | 11) && h > 2 {
+            let y = 1u16;
+            let cs = [crate::pal::RD, crate::pal::GR, CY, crate::pal::PK, LI, crate::pal::WH];
+            for x in 0..w {
+                if oc(x as i32, y as i32) {
+                    continue;
+                }
+                let k = x as u64 / 5;
+                if x % 5 == 2 {
+                    let c = cs[(k % cs.len() as u64) as usize];
+                    let tw = pulse(t + hsh(k, 3) % 90, 45.0 + (hsh(k, 9) % 30) as f32);
+                    b[(x, y)].set_symbol("●").set_style(Style::new().fg(grad(&[base, c], 0.35 + tw * 0.55)));
+                } else {
+                    b[(x, y)].set_symbol("‿").set_style(Style::new().fg(grad(&[base, crate::pal::FA], 0.45)));
                 }
             }
         }

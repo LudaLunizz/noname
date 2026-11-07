@@ -121,9 +121,10 @@ Type a name on its own and press `enter`, or open the picker with `/background` 
 | `lavat` | lava lamp | `tty-clock` | large clock |
 | `pipes` | pipes.sh | `weathr` | live weather |
 | `asciiquarium` | aquarium | `cbonsai` | growing bonsai |
-| `globe` | rotating globe | `off` | nothing |
+| `globe` | rotating globe | `snow` | snow that settles on text, built in |
+| `off` | nothing | | |
 
-`stars`, `matrix` and `rain` are part of noname. The others are optional programs you install yourself; noname finds them in `PATH` and common folders like `~/.cargo/bin`, lists only installed ones in the picker and prints the install command for missing ones. External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background`.
+`stars`, `matrix`, `rain` and `snow` are part of noname. Snow piles up on letters and lines and slides off when they move; in November and December a string of lights hangs across the top. The others are optional programs you install yourself; noname finds them in `PATH` and common folders like `~/.cargo/bin`, lists only installed ones in the picker and prints the install command for missing ones. External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background`.
 
 <p align="center">
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/start-dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/start-light.png"><img src="assets/start-dark.png" width="420"></picture>
@@ -155,7 +156,7 @@ noname bundles no other programs. Claude Code (proprietary, Anthropic), Codex (A
 | asciiquarium | GPL-2.0+ |
 | cbonsai, unimatrix, neo-matrix, weathr, globe | GPL-3.0 |
 
-`stars`, `matrix` and `rain` are original code in noname, not ports.
+`stars`, `matrix`, `rain` and `snow` are original code in noname, not ports.
 
 ## Development
 
