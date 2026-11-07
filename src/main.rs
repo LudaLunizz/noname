@@ -496,14 +496,22 @@ impl V for V1 {
             }
             extra.push(Line::default());
         }
-        if let Some((v, sel)) = &a.rs {
-            extra.push(Line::from(Span::styled("resume", st(L2).bold())));
-            let lo = sel.saturating_sub(7).min(v.len().saturating_sub(8));
-            for (j, (_, t, age)) in v.iter().enumerate().skip(lo).take(8) {
-                let on = j == *sel;
-                let tw = w.saturating_sub(10);
+        if let Some((all, sel)) = &a.rs {
+            let v = a.rhits();
+            let sel = (*sel).min(v.len().saturating_sub(1));
+            let hd = vec![Span::styled("resume", st(L2).bold()), Span::styled("  ", st(FA)), Span::styled(if a.rq.is_empty() { "type to search".to_string() } else { a.rq.clone() }, if a.rq.is_empty() { st(FA) } else { st(WH) })];
+            extra.push(lr(hd, vec![Span::styled(format!("{}/{}", v.len(), all.len()), st(FA))], w));
+            extra.push(Line::default());
+            let lo = sel.saturating_sub(5).min(v.len().saturating_sub(6));
+            for (j, (_, t, meta)) in v.iter().enumerate().skip(lo).take(6) {
+                let on = j == sel;
+                let tw = w.saturating_sub(4);
                 let t: String = if t.chars().count() > tw { t.chars().take(tw.saturating_sub(1)).collect::<String>() + "…" } else { t.clone() };
-                extra.push(lr(vec![Span::styled(if on { "› " } else { "  " }, st(LI).bold()), Span::styled(t, if on { st(WH).bold() } else { st(MU) })], vec![Span::styled(age.clone(), st(FA))], w));
+                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI).bold()), Span::styled(t, if on { st(WH).bold() } else { st(FG) })]));
+                extra.push(Line::from(vec![pad(2), Span::styled(meta.clone(), st(if on { MU } else { FA }))]));
+            }
+            if v.is_empty() {
+                extra.push(Line::from(Span::styled("  no match", st(FA))));
             }
             extra.push(Line::default());
         }

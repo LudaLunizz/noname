@@ -436,7 +436,7 @@ impl App {
         let cur = self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default();
         let Ok(rd) = std::fs::read_dir(pdir(&cwd)) else { return vec![] };
         let now = std::time::SystemTime::now();
-        let mut v: Vec<(std::time::SystemTime, String, String)> = vec![];
+        let mut v: Vec<(std::time::SystemTime, String, String, String)> = vec![];
         for e in rd.flatten() {
             let p = e.path();
             if p.extension().is_none_or(|x| x != "jsonl") {
@@ -448,36 +448,54 @@ impl App {
             }
             let Ok(m) = e.metadata().and_then(|m| m.modified()) else { continue };
             let Ok(f) = std::fs::read_to_string(&p) else { continue };
-            let mut title = String::new();
+            let (mut first, mut ct, mut at, mut sm, mut br) = (String::new(), String::new(), String::new(), String::new(), String::new());
+            let mut n = 0usize;
             for l in f.lines() {
+                if !(l.contains("\"type\":\"user\"") || l.contains("\"type\":\"assistant\"") || l.contains("title\"") || l.contains("\"summary\"")) {
+                    continue;
+                }
                 let Ok(o) = serde_json::from_str::<Value>(l) else { continue };
-                if o["type"] == "user" && o["isMeta"] != true && o["isSidechain"] != true {
-                    let c = &o["message"]["content"];
-                    let t = match c {
-                        Value::String(t) => t.clone(),
-                        Value::Array(a) => a.iter().filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join(" "),
-                        _ => String::new(),
-                    };
-                    if !t.is_empty() && !t.starts_with('<') && !t.starts_with("[Request") {
-                        title = one(&t, 90);
-                        break;
+                match o["type"].as_str().unwrap_or("") {
+                    "custom-title" => ct = sv(&o, "customTitle"),
+                    "ai-title" => at = sv(&o, "aiTitle"),
+                    "summary" => sm = sv(&o, "summary"),
+                    "assistant" if o["isSidechain"] != true => n += 1,
+                    "user" if o["isSidechain"] != true && o["isMeta"] != true => {
+                        let c = &o["message"]["content"];
+                        let t = match c {
+                            Value::String(t) => t.clone(),
+                            Value::Array(a) => a.iter().filter(|x| x["type"] == "text").filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join(" "),
+                            _ => String::new(),
+                        };
+                        if t.is_empty() || t.starts_with('<') || t.starts_with("[Request") {
+                            continue;
+                        }
+                        n += 1;
+                        if first.is_empty() {
+                            first = t;
+                        }
+                        let b = sv(&o, "gitBranch");
+                        if !b.is_empty() && b != "HEAD" {
+                            br = b;
+                        }
                     }
+                    _ => {}
                 }
             }
+            let title = [ct, at, sm, first].into_iter().find(|x| !x.trim().is_empty()).unwrap_or_default();
             if title.is_empty() {
                 continue;
             }
-            v.push((m, id, title));
+            let s = now.duration_since(m).map(|d| d.as_secs()).unwrap_or(0);
+            let age = if s < 60 { "just now".to_string() } else if s < 3600 { format!("{}m ago", s / 60) } else if s < 86400 { format!("{}h ago", s / 3600) } else { format!("{}d ago", s / 86400) };
+            let mut meta = format!("{age}  ·  {n} messages");
+            if !br.is_empty() {
+                meta += &format!("  ·  {br}");
+            }
+            v.push((m, id, one(&title, 120), meta));
         }
         v.sort_by(|a, b| b.0.cmp(&a.0));
-        v.into_iter()
-            .take(30)
-            .map(|(m, id, t)| {
-                let s = now.duration_since(m).map(|d| d.as_secs()).unwrap_or(0);
-                let age = if s < 3600 { format!("{}m", s / 60) } else if s < 86400 { format!("{}h", s / 3600) } else { format!("{}d", s / 86400) };
-                (id, t, age)
-            })
-            .collect()
+        v.into_iter().take(50).map(|(_, id, t, m)| (id, t, m)).collect()
     }
 
     pub(crate) fn lresume(&mut self, id: &str) {

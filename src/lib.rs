@@ -191,6 +191,7 @@ pub struct App {
     pub sug: Option<String>,
     pub ms: usize,
     pub rs: Option<(Vec<(String, String, String)>, usize)>,
+    pub rq: String,
     pub bp: Option<(usize, Option<&'static str>)>,
     le: u64,
 }
@@ -367,6 +368,7 @@ impl App {
             sug: None,
             ms: 0,
             rs: None,
+            rq: String::new(),
             bp: None,
             le: 0,
             tf: false,
@@ -664,6 +666,12 @@ impl App {
         self.inp.chars().count()
     }
 
+    pub fn rhits(&self) -> Vec<(String, String, String)> {
+        let Some((v, _)) = &self.rs else { return vec![] };
+        let q = self.rq.to_lowercase();
+        v.iter().filter(|x| q.is_empty() || x.1.to_lowercase().contains(&q) || x.2.to_lowercase().contains(&q)).cloned().collect()
+    }
+
     pub fn users(&self) -> Vec<usize> {
         self.bs.iter().enumerate().filter(|(_, b)| matches!(b, B::U(..))).map(|(i, _)| i).collect()
     }
@@ -739,14 +747,28 @@ impl App {
             return;
         }
         if self.rs.is_some() && !(ct && k.code == KeyCode::Char('c')) {
-            let Some((v, sel)) = &mut self.rs else { return };
+            let hits = self.rhits();
+            let Some((_, sel)) = &mut self.rs else { return };
             match k.code {
+                KeyCode::Esc if !self.rq.is_empty() => {
+                    self.rq.clear();
+                    *sel = 0
+                }
                 KeyCode::Esc => self.rs = None,
                 KeyCode::Up => *sel = sel.saturating_sub(1),
-                KeyCode::Down => *sel = (*sel + 1).min(v.len().saturating_sub(1)),
+                KeyCode::Down => *sel = (*sel + 1).min(hits.len().saturating_sub(1)),
+                KeyCode::Backspace => {
+                    self.rq.pop();
+                    *sel = 0
+                }
+                KeyCode::Char(c) => {
+                    self.rq.push(c);
+                    *sel = 0
+                }
                 KeyCode::Enter => {
-                    let id = v.get(*sel).map(|x| x.0.clone());
+                    let id = hits.get(*sel).map(|x| x.0.clone());
                     self.rs = None;
+                    self.rq.clear();
                     if let Some(id) = id {
                         self.lresume(&id);
                     }
