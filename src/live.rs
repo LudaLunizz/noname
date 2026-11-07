@@ -374,11 +374,15 @@ impl App {
         v.push(("theme".into(), crate::pal::THEMES.iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
         v.push(("background".into(), crate::bg::LIST.into()));
         v.push(("resume".into(), "pick an older session in this folder".into()));
-        if self.wk.is_some() {
+        if self.swok() {
             v.retain(|x| x.0 != "apolloclaw:switch");
             v.push(("switch".into(), "switch between personal and work account".into()));
         }
         v
+    }
+
+    fn swok(&self) -> bool {
+        self.wk.is_some() && self.lv.as_ref().is_some_and(|l| l.cmds.iter().any(|c| c.0 == "apolloclaw:switch"))
     }
 
     pub fn is_live(&self) -> bool {
@@ -435,7 +439,7 @@ impl App {
                 self.toast(format!("model  {}", self.mname));
             }
             "quit" | "exit" => self.quit = true,
-            "switch" | "apolloclaw:switch" => self.lswitch(),
+            "switch" | "apolloclaw:switch" if self.swok() => self.lswitch(),
             "resume" | "continue" if arg.is_empty() => {
                 let v = self.sessions();
                 if v.is_empty() {
@@ -619,6 +623,9 @@ impl App {
         if self.ask.is_some() {
             self.lanswer('n');
         }
+        if self.qa.is_some() {
+            self.qdone(false);
+        }
         for b in self.bs.iter_mut() {
             if let B::Tl(t) = b {
                 if t.st == St::Run {
@@ -630,6 +637,18 @@ impl App {
         }
         self.sb = None;
         self.bs.push(B::Sys("interrupted".into()));
+    }
+
+    pub(crate) fn lqa(&mut self, q: Qa, ok: bool) {
+        let r = if ok {
+            let mut inp = q.inp.clone();
+            let m: serde_json::Map<String, Value> = q.ans.iter().map(|(a, b)| (a.clone(), json!(b))).collect();
+            inp["answers"] = Value::Object(m);
+            json!({"behavior": "allow", "updatedInput": inp})
+        } else {
+            json!({"behavior": "deny", "message": "The user dismissed the question."})
+        };
+        self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": q.id, "response": r}}));
     }
 
     pub(crate) fn lanswer(&mut self, c: char) {
@@ -743,7 +762,27 @@ impl App {
             }
             "control_request" => {
                 let r = &e["request"];
-                if r["subtype"] == "can_use_tool" {
+                if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "AskUserQuestion" {
+                    let qs: Vec<Qq> = r["input"]["questions"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|x| Qq {
+                            q: sv(x, "question"),
+                            h: sv(x, "header"),
+                            opts: x["options"].as_array().cloned().unwrap_or_default().iter().map(|o| (sv(o, "label"), sv(o, "description"))).collect(),
+                            multi: x["multiSelect"] == true,
+                        })
+                        .collect();
+                    let id = sv(&e, "request_id");
+                    if qs.is_empty() {
+                        self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {"behavior": "allow", "updatedInput": r["input"].clone()}}}));
+                    } else {
+                        let n = qs[0].opts.len();
+                        self.qa = Some(Qa { id, inp: r["input"].clone(), qs, i: 0, sel: 0, pick: vec![false; n], ans: vec![] });
+                    }
+                } else if r["subtype"] == "can_use_tool" {
                     let name = sv(r, "tool_name");
                     let t = mk(&name, &r["input"]);
                     let cmd = if t.a.is_empty() { t.nm.clone() } else { format!("{}  {}", t.nm, t.a) };

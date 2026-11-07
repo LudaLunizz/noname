@@ -144,6 +144,7 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
         match b {
             B::Th(s) if s.trim().is_empty() && a.streaming() != Some(i) => continue,
             B::Ask(k) if matches!(k.ans, Some('y') | Some('a')) => continue,
+            B::Tl(t) if t.nm == "askuserquestion" => continue,
             _ => {}
         }
         let k = match b {
@@ -152,7 +153,7 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
             B::Th(_) => 3,
             B::Tl(_) => 4,
             B::Ask(_) => 7,
-            B::Sys(_) => 5,
+            B::Sys(_) | B::Qa(..) => 5,
             B::Rc(..) => 6,
         };
         if !v.is_empty() && k != 6 && (k != pk || k == 1 || k == 2) {
@@ -327,6 +328,10 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                     v.push(lr(vec![pad(2), Span::styled("! ", st(PK()).bold()), Span::styled(format!("{:<6}", "ask"), st(MU())), Span::styled(k.cmd.clone(), st(FG()))], vec![Span::styled(t, st(col))], w));
                 }
             },
+            B::Qa(q, r) => {
+                v.push(Line::from(vec![pad(2), Span::styled("? ", st(CY()).bold()), Span::styled(q.clone(), st(MU()))]));
+                v.push(Line::from(vec![pad(4), Span::styled(r.clone(), st(WH()))]));
+            }
             B::Rc(x, t0) => {
                 let el = a.t.saturating_sub(*t0) * 2;
                 let mut sp = vec![pad(2)];
@@ -488,6 +493,37 @@ impl V for V1 {
             }
             extra.push(Line::default());
         }
+        if let Some(q) = &a.qa {
+            let c = &q.qs[q.i];
+            let hd = vec![Span::styled(if c.h.is_empty() { "question".to_string() } else { c.h.to_lowercase() }, st(L2()).bold())];
+            let rt = if q.qs.len() > 1 { vec![Span::styled(format!("{}/{}", q.i + 1, q.qs.len()), st(FA()))] } else { vec![] };
+            extra.push(lr(hd, rt, w));
+            extra.push(Line::from(Span::styled(c.q.clone(), st(WH()).bold())));
+            extra.push(Line::default());
+            let lw = c.opts.iter().map(|o| o.0.chars().count()).max().unwrap_or(0).min(40) + 3;
+            for (j, (l, d)) in c.opts.iter().enumerate() {
+                let on = j == q.sel;
+                let mut sp = vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold())];
+                if c.multi {
+                    sp.push(Span::styled(if q.pick[j] { "[x] " } else { "[ ] " }, st(if q.pick[j] { GR() } else { FA() })));
+                } else {
+                    sp.push(Span::styled(format!("{}  ", j + 1), st(FA())));
+                }
+                let l: String = l.chars().take(40).collect();
+                sp.push(Span::styled(format!("{l:<lw$}"), if on { st(WH()).bold() } else { st(FG()) }));
+                let dw = w.saturating_sub(lw + 10);
+                let d: String = if d.chars().count() > dw { d.chars().take(dw.saturating_sub(1)).collect::<String>() + "…" } else { d.clone() };
+                sp.push(Span::styled(d, st(if on { MU() } else { FA() })));
+                extra.push(Line::from(sp));
+            }
+            let on = q.sel == c.opts.len();
+            extra.push(Line::from(vec![
+                Span::styled(if on { "› " } else { "  " }, st(LI()).bold()),
+                Span::styled(if c.multi { "    " } else { "   " }, st(FA())),
+                Span::styled("other", if on { st(WH()).bold() } else { st(MU()) }),
+            ]));
+            extra.push(Line::default());
+        }
         if let Some(sel) = a.ns {
             extra.push(Line::from(Span::styled("noname", st(L2()).bold())));
             let rows = a.nrows();
@@ -627,7 +663,7 @@ impl V for V1 {
             f.render_widget(Paragraph::new(rule.clone()), col(ry, 1));
         }
         let iy = ry + 1;
-        let pc = if a.ask.is_some() { PK() } else { [LI(), CY(), GR(), RD()][a.mode] };
+        let pc = if a.ask.is_some() || a.qa.is_some() { PK() } else { [LI(), CY(), GR(), RD()][a.mode] };
         let pg: Vec<Span<'static>> = if a.tm > 0 && a.t.saturating_sub(a.tm) < 9 {
             noise(1, a.t, 61, &gd())
         } else {

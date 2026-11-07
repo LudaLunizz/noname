@@ -69,7 +69,7 @@ cargo install --path .
 
 **Windows**
 
-Works in PowerShell inside Windows Terminal. Install Rust from [rustup.rs](https://rustup.rs), then run the same three commands in PowerShell. noname finds `claude.exe` from the native installer as well as `claude.cmd` from npm. Child processes run in a job object, so closing the tab also ends Claude and its MCP servers. Only the built-in backgrounds are available, and `/switch` is not.
+Works in PowerShell inside Windows Terminal. Install Rust from [rustup.rs](https://rustup.rs), then run the same three commands in PowerShell. noname finds `claude.exe` from the native installer as well as `claude.cmd` from npm. Child processes run in a job object, so closing the tab also ends Claude and its MCP servers. Only the built-in backgrounds are available.
 
 **Updates**
 
@@ -119,7 +119,6 @@ Every Claude Code command and skill is available. noname adds or replaces these:
 | `/theme` | pick a color theme: `default`, `dracula`, `tokyo-night`, `mocha` |
 | `/default-permission` | pick the permission mode new sessions start in |
 | `/clear` | start a fresh session |
-| `/switch` | swap between personal and work account, same session (needs a work token from `claude setup-token` in the keyring under `NONAME_WORK_TOKEN`) |
 
 ## Backgrounds
 

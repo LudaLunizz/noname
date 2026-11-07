@@ -163,7 +163,25 @@ pub struct Ask {
 }
 
 #[derive(Clone)]
+pub struct Qq {
+    pub q: String,
+    pub h: String,
+    pub opts: Vec<(String, String)>,
+    pub multi: bool,
+}
+
+pub struct Qa {
+    pub id: String,
+    pub inp: serde_json::Value,
+    pub qs: Vec<Qq>,
+    pub i: usize,
+    pub sel: usize,
+    pub pick: Vec<bool>,
+    pub ans: Vec<(String, String)>,
+}
+
 pub enum B {
+    Qa(String, String),
     U(String, String),
     T(String),
     Th(String),
@@ -251,6 +269,7 @@ pub struct App {
     pub tp: Option<(usize, usize)>,
     pub pp: Option<usize>,
     pub ns: Option<usize>,
+    pub qa: Option<Qa>,
     pub upr: Option<std::sync::mpsc::Receiver<upd::Up>>,
     pub ups: String,
     pub upf: bool,
@@ -437,6 +456,7 @@ impl App {
             tp: None,
             pp: None,
             ns: None,
+            qa: None,
             upr: None,
             ups: String::new(),
             upf: false,
@@ -702,6 +722,78 @@ impl App {
         }
     }
 
+    fn qkey(&mut self, k: KeyEvent) -> bool {
+        let Some(q) = &mut self.qa else { return false };
+        let cur = &q.qs[q.i];
+        let n = cur.opts.len();
+        let other = q.sel == n;
+        match k.code {
+            KeyCode::Esc => {
+                self.qdone(false);
+                return true;
+            }
+            KeyCode::Up => q.sel = q.sel.saturating_sub(1),
+            KeyCode::Down => q.sel = (q.sel + 1).min(n),
+            KeyCode::Char(c) if !other && c.is_ascii_digit() && c != '0' && (c as usize - '1' as usize) < n => {
+                let j = c as usize - '1' as usize;
+                q.sel = j;
+                if cur.multi {
+                    q.pick[j] = !q.pick[j];
+                } else {
+                    self.qnext(cur_label(&self.qa, j));
+                }
+            }
+            KeyCode::Char(' ') if !other && cur.multi => q.pick[q.sel] = !q.pick[q.sel],
+            KeyCode::Enter if other => {
+                let t = self.inp.trim().to_string();
+                if t.is_empty() {
+                    return true;
+                }
+                self.inp.clear();
+                self.cur = 0;
+                let mut v: Vec<String> = if cur.multi { cur.opts.iter().zip(&q.pick).filter(|x| *x.1).map(|x| x.0.0.clone()).collect() } else { vec![] };
+                v.push(t);
+                self.qnext(v.join(", "));
+            }
+            KeyCode::Enter => {
+                let a = if cur.multi {
+                    let v: Vec<String> = cur.opts.iter().zip(&q.pick).filter(|x| *x.1).map(|x| x.0.0.clone()).collect();
+                    if v.is_empty() { cur.opts[q.sel].0.clone() } else { v.join(", ") }
+                } else {
+                    cur.opts[q.sel].0.clone()
+                };
+                self.qnext(a);
+            }
+            _ => return !other,
+        }
+        true
+    }
+
+    fn qnext(&mut self, a: String) {
+        let Some(q) = &mut self.qa else { return };
+        let qt = q.qs[q.i].q.clone();
+        q.ans.push((qt, a));
+        q.i += 1;
+        if q.i >= q.qs.len() {
+            self.qdone(true);
+            return;
+        }
+        q.sel = 0;
+        q.pick = vec![false; q.qs[q.i].opts.len()];
+    }
+
+    fn qdone(&mut self, ok: bool) {
+        let Some(q) = self.qa.take() else { return };
+        if ok {
+            for (a, b) in &q.ans {
+                self.bs.push(B::Qa(a.clone(), b.clone()));
+            }
+        } else {
+            self.bs.push(B::Sys("question dismissed".into()));
+        }
+        self.lqa(q, ok);
+    }
+
     pub fn upcheck(&mut self, force: bool) {
         if self.upr.is_some() {
             return;
@@ -899,6 +991,9 @@ impl App {
         let ct = k.modifiers.contains(Km::CONTROL);
         if self.rw.is_some() && !(ct && k.code == KeyCode::Char('c')) {
             self.rwkey(k);
+            return;
+        }
+        if self.qa.is_some() && !(ct && k.code == KeyCode::Char('c')) && self.qkey(k) {
             return;
         }
         if let Some(sel) = self.ns {
@@ -1560,6 +1655,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     Ok(())
 }
 
+fn cur_label(q: &Option<Qa>, j: usize) -> String {
+    q.as_ref().map(|q| q.qs[q.i].opts[j].0.clone()).unwrap_or_default()
+}
+
 pub fn modefile() -> String {
     sys::cfgfile("permission")
 }
@@ -1584,7 +1683,7 @@ pub fn bgfile() -> String {
 
 fn ttl(a: &App) -> String {
     let d = a.cwd.rsplit('/').next().unwrap_or("").to_string();
-    let st = if a.ask.is_some() { " · waiting" } else if a.busy { " · working" } else { "" };
+    let st = if a.ask.is_some() || a.qa.is_some() { " · waiting" } else if a.busy { " · working" } else { "" };
     format!("noname · {d}{st}")
 }
 
