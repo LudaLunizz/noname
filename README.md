@@ -71,6 +71,10 @@ cargo install --path .
 
 Works in PowerShell inside Windows Terminal. Install Rust from [rustup.rs](https://rustup.rs), then run the same three commands in PowerShell. noname finds `claude.exe` from the native installer as well as `claude.cmd` from npm. Child processes run in a job object, so closing the tab also ends Claude and its MCP servers. Only the built-in backgrounds are available, and `/switch` is not.
 
+**Updates**
+
+noname updates itself. At most every six hours it fetches the repository in the background, builds the new version with cargo and replaces its own binary; a line in the chat tells you to restart. Builds with uncommitted changes and builds newer than GitHub are never replaced. Turn it off in `/noname` or with `NONAME_NO_UPDATE=1`. Needs `git` and `cargo`, and access to the repository.
+
 ## Usage
 
 ```sh
@@ -111,6 +115,7 @@ Every Claude Code command and skill is available. noname adds or replaces these:
 | `/resume` | pick an older session of this folder |
 | `/model` | cycle models |
 | `/background` | open the background picker |
+| `/noname` | settings: auto-update, theme, default permission, background, version |
 | `/theme` | pick a color theme: `default`, `dracula`, `tokyo-night`, `mocha` |
 | `/default-permission` | pick the permission mode new sessions start in |
 | `/clear` | start a fresh session |
