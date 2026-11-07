@@ -11,6 +11,8 @@ fn main() {
     println!("cargo:rustc-env=NONAME_REV={rev}");
     println!("cargo:rustc-env=NONAME_DIRTY={}", if dirty { "1" } else { "" });
     println!("cargo:rustc-env=NONAME_DATE={date}");
+    println!("cargo:rustc-env=NONAME_TARGET={}", std::env::var("TARGET").unwrap_or_default());
+    println!("cargo:rerun-if-env-changed=NONAME_CHANNEL");
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
     println!("cargo:rerun-if-changed=src");

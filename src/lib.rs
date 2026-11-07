@@ -805,7 +805,10 @@ impl App {
 
     pub fn nrows(&self) -> Vec<(&'static str, String)> {
         vec![
-            ("auto-update", if upd::enabled() { "on" } else { "off" }.into()),
+            ("auto-update", match upd::managed() {
+                Some(m) => format!("via {m}"),
+                None => if upd::enabled() { "on" } else { "off" }.into(),
+            }),
             ("theme", pal::THEMES[pal::cur()].name.into()),
             ("default permission", MODES[defmode().unwrap_or(0)].into()),
             ("background", self.bgw.unwrap_or("off").into()),
@@ -1007,6 +1010,7 @@ impl App {
                 KeyCode::Up => self.ns = Some(sel.saturating_sub(1)),
                 KeyCode::Down => self.ns = Some((sel + 1).min(n - 1)),
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
+                    0 if upd::managed().is_some() => {}
                     0 => {
                         let on = !upd::enabled();
                         upd::set_enabled(on);
@@ -1568,6 +1572,10 @@ pub trait V {
 
 pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
+        println!("noname {} ({})", upd::VERSION, upd::short());
+        return Ok(());
+    }
     if args.len() > 1 && args[1] == "--dump" {
         return dump(&mut v, &args[2..]);
     }
@@ -1605,7 +1613,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     let mut lt = String::new();
     sys::on_close(live::killall);
     upd::cleanup();
-    if std::env::var("NONAME_MOCK").is_err() && upd::enabled() && upd::due() {
+    if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
         a.upcheck(false);
     }
     while !a.quit {

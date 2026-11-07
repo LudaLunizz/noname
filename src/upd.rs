@@ -8,6 +8,12 @@ pub const REV: &str = env!("NONAME_REV");
 pub const DIRTY: bool = !env!("NONAME_DIRTY").is_empty();
 pub const DATE: &str = env!("NONAME_DATE");
 const URL: &str = env!("CARGO_PKG_REPOSITORY");
+const TARGET: &str = env!("NONAME_TARGET");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+const CHANNEL: &str = match option_env!("NONAME_CHANNEL") {
+    Some(c) => c,
+    None => "source",
+};
 const EVERY: u64 = 6 * 3600;
 
 pub enum Up {
@@ -17,7 +23,25 @@ pub enum Up {
     Fail(String),
 }
 
+pub fn managed() -> Option<&'static str> {
+    let p = std::env::current_exe().ok()?.to_string_lossy().replace('\\', "/").to_lowercase();
+    if p.contains("/cellar/") || p.contains("/homebrew/") || p.contains("/linuxbrew/") {
+        Some("brew")
+    } else if p.contains("/scoop/") {
+        Some("scoop")
+    } else if p.contains("/winget/") || p.contains("/windowsapps/") {
+        Some("winget")
+    } else if p.starts_with("/usr/") || p.starts_with("/nix/") || p.starts_with("/opt/") || CHANNEL == "package" {
+        Some("your package manager")
+    } else {
+        None
+    }
+}
+
 pub fn short() -> String {
+    if CHANNEL != "source" {
+        return VERSION.to_string();
+    }
     let r: String = REV.chars().take(7).collect();
     let r = if r.is_empty() { "dev".to_string() } else { r };
     if DIRTY { format!("{r}+") } else { r }
@@ -89,6 +113,12 @@ pub fn check(force: bool) -> Receiver<Up> {
 }
 
 fn run(force: bool) -> Up {
+    if let Some(m) = managed() {
+        return Up::Skip(format!("updates come from {m}"));
+    }
+    if CHANNEL == "release" {
+        return release();
+    }
     if DIRTY && !force {
         return Up::Skip("local build with uncommitted changes".into());
     }
@@ -153,4 +183,52 @@ fn swap(nb: &Path, me: &Path) -> std::io::Result<()> {
         std::fs::rename(me, &old)?;
     }
     std::fs::rename(&tmp, me)
+}
+
+fn newer(a: &str, b: &str) -> bool {
+    let p = |s: &str| s.trim_start_matches('v').split(['.', '-']).map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    p(a) > p(b)
+}
+
+fn release() -> Up {
+    let Some(curl) = sys::which("curl") else { return Up::Skip("needs curl".into()) };
+    let Some(tar) = sys::which("tar") else { return Up::Skip("needs tar".into()) };
+    let f = sys::cfgfile("update-check");
+    if let Some(d) = Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, now().to_string());
+    let api = URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest";
+    let j = out(Command::new(&curl).args(["-fsSL", "-H", "Accept: application/vnd.github+json", "-A", "noname-updater", &api]));
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) else { return Up::Fail("could not reach github".into()) };
+    let tag = v["tag_name"].as_str().unwrap_or("").to_string();
+    if tag.is_empty() {
+        return Up::Fail("no release found".into());
+    }
+    if !newer(&tag, VERSION) {
+        return Up::Current;
+    }
+    let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
+    let name = format!("noname-{TARGET}.{ext}");
+    let Some(url) = v["assets"].as_array().and_then(|a| a.iter().find(|x| x["name"] == name.as_str())).and_then(|x| x["browser_download_url"].as_str()).map(|s| s.to_string()) else {
+        return Up::Fail(format!("no build for {TARGET}"));
+    };
+    let d = cache().with_file_name("dl");
+    let _ = std::fs::remove_dir_all(&d);
+    if std::fs::create_dir_all(&d).is_err() {
+        return Up::Fail("no cache folder".into());
+    }
+    let arc = d.join(&name);
+    if !ok(Command::new(&curl).args(["-fsSL", "-A", "noname-updater", "-o"]).arg(&arc).arg(&url)) {
+        return Up::Fail("download failed".into());
+    }
+    if !ok(Command::new(&tar).arg("-xf").arg(&arc).arg("-C").arg(&d)) {
+        return Up::Fail("could not unpack".into());
+    }
+    let nb = d.join(if cfg!(windows) { "noname.exe" } else { "noname" });
+    let Ok(me) = std::env::current_exe() else { return Up::Fail("unknown install path".into()) };
+    if let Err(e) = swap(&nb, &me) {
+        return Up::Fail(format!("install failed: {e}"));
+    }
+    Up::Ready(tag)
 }

@@ -1,0 +1,25 @@
+# Maintainer: Silvertree2010 <silvertreexsing@gmail.com>
+pkgname=noname-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="A calm, beautiful terminal front end for Claude Code (prebuilt)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Silvertree2010/noname"
+license=('AGPL-3.0-only')
+provides=('noname')
+conflicts=('noname')
+optdepends=('claude-code: the engine noname drives'
+            'cava: audio visualizer background'
+            'cbonsai: bonsai background'
+            'asciiquarium: aquarium background')
+options=('!strip' '!debug')
+source_x86_64=("noname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/noname-x86_64-unknown-linux-musl.tar.gz")
+source_aarch64=("noname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/noname-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('@SHA_x86_64-unknown-linux-musl@')
+sha256sums_aarch64=('@SHA_aarch64-unknown-linux-musl@')
+
+package() {
+  install -Dm755 noname "$pkgdir/usr/bin/noname"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

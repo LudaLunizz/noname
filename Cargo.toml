@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Silvertree2010/noname"
+homepage = "https://github.com/Silvertree2010/noname"
+description = "A calm, beautiful terminal front end for Claude Code"
+readme = "README.md"
+keywords = ["claude", "tui", "terminal", "ai", "ratatui"]
+categories = ["command-line-utilities"]
+rust-version = "1.85"
+exclude = ["assets/*", "packaging/*", ".github/*"]
 
 [dependencies]
 ratatui = "0.29"
@@ -20,3 +27,29 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 
 [profile.release]
 opt-level = 3
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[package.metadata.deb]
+maintainer = "Silvertree2010 <silvertreexsing@gmail.com>"
+copyright = "Silvertree2010"
+extended-description = "noname drives the official Claude Code CLI in the background and draws its own calm terminal interface on top."
+section = "utils"
+priority = "optional"
+depends = ""
+assets = [
+    ["target/x86_64-unknown-linux-musl/dist/noname", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/noname/README.md", "644"],
+    ["LICENSE", "usr/share/licenses/noname/LICENSE", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/x86_64-unknown-linux-musl/dist/noname", dest = "/usr/bin/noname", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/noname/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/noname/LICENSE", mode = "644", doc = true },
+]

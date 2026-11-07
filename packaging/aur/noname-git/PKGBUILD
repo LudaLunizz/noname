@@ -1,0 +1,46 @@
+# Maintainer: Silvertree2010 <silvertreexsing@gmail.com>
+pkgname=noname-git
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="A calm, beautiful terminal front end for Claude Code (latest commit)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Silvertree2010/noname"
+license=('AGPL-3.0-only')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'git')
+optdepends=('claude-code: the engine noname drives'
+            'cava: audio visualizer background'
+            'cbonsai: bonsai background'
+            'asciiquarium: aquarium background')
+provides=('noname')
+conflicts=('noname')
+options=('!lto' '!debug')
+source=("$pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  git describe --long --tags --abbrev=7 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export NONAME_CHANNEL=package
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 target/release/noname "$pkgdir/usr/bin/noname"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/noname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/noname/README.md"
+}

@@ -1,0 +1,101 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  NONAME_CHANNEL: release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --locked --profile dist --target ${{ matrix.target }}
+      - name: package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p out
+          cp target/${{ matrix.target }}/dist/noname LICENSE README.md out/
+          tar -C out -czf noname-${{ matrix.target }}.tar.gz noname LICENSE README.md
+          shasum -a 256 noname-${{ matrix.target }}.tar.gz > noname-${{ matrix.target }}.tar.gz.sha256
+      - name: package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item target/${{ matrix.target }}/dist/noname.exe, LICENSE, README.md out/
+          Compress-Archive -Path out/* -DestinationPath noname-${{ matrix.target }}.zip
+          $h = (Get-FileHash noname-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower()
+          "$h  noname-${{ matrix.target }}.zip" | Out-File -Encoding ascii noname-${{ matrix.target }}.zip.sha256
+      - if: matrix.target == 'x86_64-unknown-linux-musl'
+        name: deb and rpm
+        run: |
+          cargo install cargo-deb cargo-generate-rpm --locked
+          cargo deb --no-build --no-strip --target x86_64-unknown-linux-musl -o noname_amd64.deb
+          cargo generate-rpm --target x86_64-unknown-linux-musl --profile dist -o noname.x86_64.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noname-${{ matrix.target }}
+          path: |
+            noname-*.tar.gz
+            noname-*.zip
+            noname-*.sha256
+            *.deb
+            *.rpm
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums and package manifests
+        run: |
+          cd dist
+          cat *.sha256 > SHA256SUMS
+          sha256sum *.deb *.rpm >> SHA256SUMS
+          cd ..
+          packaging/render.sh "${TAG#v}" dist/SHA256SUMS dist/packaging
+          tar -C dist -czf dist/packaging.tar.gz packaging
+          rm -rf dist/packaging
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "noname $TAG" --generate-notes --verify-tag
+          gh release upload "$TAG" dist/* install.sh install.ps1 --clobber
