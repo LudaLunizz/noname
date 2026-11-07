@@ -90,6 +90,7 @@ impl App {
         a.mname = rest.iter().position(|x| x == "-m").and_then(|i| rest.get(i + 1)).cloned().unwrap_or_else(cfg_model);
         a.effs = String::new();
         a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
+        a.mode = crate::defmode().unwrap_or(0);
         a.cx = Some(Cx { tid, ch: None, rx: None, args: rest, im: HashMap::new(), last, t0: 0 });
         Ok(a)
     }

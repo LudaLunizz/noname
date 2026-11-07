@@ -16,41 +16,43 @@ impl Clone for V1 {
     }
 }
 
-const GD: [Color; 3] = [LI, L2, CY];
+fn gd() -> [Color; 3] {
+    [LI(), L2(), CY()]
+}
 
 fn tail_nz(v: &mut Vec<Line<'static>>, a: &App, seed: u64) {
     if let Some(l) = v.last_mut() {
         l.spans.push(pad(1));
-        l.spans.extend(noise(3, a.t, seed, &GD));
+        l.spans.extend(noise(3, a.t, seed, &gd()));
     }
 }
 
 fn sy(k: Tk) -> (&'static str, Color) {
     match k {
-        Tk::Read => (".", CY),
-        Tk::Edit => ("+", GR),
-        Tk::Bash => ("$", LI),
-        Tk::Grep => ("?", CY),
-        Tk::Web => ("@", L2),
-        Tk::Task => ("&", PK),
-        Tk::Oth => ("*", PE),
+        Tk::Read => (".", CY()),
+        Tk::Edit => ("+", GR()),
+        Tk::Bash => ("$", LI()),
+        Tk::Grep => ("?", CY()),
+        Tk::Web => ("@", L2()),
+        Tk::Task => ("&", PK()),
+        Tk::Oth => ("*", PE()),
     }
 }
 
 fn mdt() -> Md {
     Md {
-        t: st(FG),
-        b: st(WH).bold(),
-        c: st(L2),
-        fe: st(PE),
-        kw: st(LI),
-        st: st(GR),
-        cm: st(FA).italic(),
-        nu: st(PK),
+        t: st(FG()),
+        b: st(WH()).bold(),
+        c: st(L2()),
+        fe: st(PE()),
+        kw: st(LI()),
+        st: st(GR()),
+        cm: st(FA()).italic(),
+        nu: st(PK()),
         bul: "- ",
-        bs: st(LI),
+        bs: st(LI()),
         fpre: "  | ",
-        fps: st(FA),
+        fps: st(FA()),
     }
 }
 
@@ -71,7 +73,7 @@ fn glitch(v: Vec<Span<'static>>, el: u64, t: u64) -> Vec<Span<'static>> {
                 if !run.is_empty() {
                     o.push(Span::styled(std::mem::take(&mut run), sp.style));
                 }
-                let gc = if hsh(t, k) % 2 == 0 { RD } else { PK };
+                let gc = if hsh(t, k) % 2 == 0 { RD() } else { PK() };
                 o.push(Span::styled(nz(t, k).to_string(), st(gc).bold()));
             } else {
                 run.push(c);
@@ -164,24 +166,24 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
             B::U(s, _) => {
                 let el = if fly && lu == Some(i) { a.t.saturating_sub(a.ts) * 3 } else { u64::MAX / 2 };
                 for (j, l) in wrap(s, w - 4).into_iter().enumerate() {
-                    let mut sp = vec![Span::styled(if j == 0 { "> " } else { "  " }, st(LI).bold())];
-                    sp.extend(decode(&l, el.saturating_sub(j as u64 * 30), a.t, 300 + j as u64, st(WH).bold(), &GD));
+                    let mut sp = vec![Span::styled(if j == 0 { "> " } else { "  " }, st(LI()).bold())];
+                    sp.extend(decode(&l, el.saturating_sub(j as u64 * 30), a.t, 300 + j as u64, st(WH()).bold(), &gd()));
                     v.push(Line::from(sp));
                 }
             }
             B::Th(s) if s.trim().is_empty() => {
-                let mut sp = vec![pad(2), Span::styled("~ ", st(FA))];
-                sp.extend(noise(6, a.t, i as u64, &GD));
-                sp.push(Span::styled("  thinking", st(FA)));
+                let mut sp = vec![pad(2), Span::styled("~ ", st(FA()))];
+                sp.extend(noise(6, a.t, i as u64, &gd()));
+                sp.push(Span::styled("  thinking", st(FA())));
                 v.push(Line::from(sp));
             }
             B::Th(s) => {
                 let ls = wrap(s, w - 6);
                 let n = if a.open || a.streaming() == Some(i) { ls.len() } else { 1 };
                 for (j, l) in ls.iter().take(n).enumerate() {
-                    let mut sp = vec![pad(2), Span::styled(if j == 0 { "~ " } else { "  " }, st(FA)), Span::styled(l.clone(), st(MU).italic())];
+                    let mut sp = vec![pad(2), Span::styled(if j == 0 { "~ " } else { "  " }, st(FA())), Span::styled(l.clone(), st(MU()).italic())];
                     if j == n - 1 && n < ls.len() {
-                        sp.push(Span::styled(" ...", st(FA)));
+                        sp.push(Span::styled(" ...", st(FA())));
                     }
                     v.push(Line::from(sp));
                 }
@@ -206,33 +208,33 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                 let ef = if t.t0 > 0 { a.t.saturating_sub(t.t1) } else { a.t };
                 let mut l = vec![pad(2)];
                 if t.st == St::Run {
-                    l.extend(noise(1, a.t, sd, &GD));
+                    l.extend(noise(1, a.t, sd, &gd()));
                 } else {
-                    let cc = if t.st == St::Err { RD } else { col };
+                    let cc = if t.st == St::Err { RD() } else { col };
                     l.push(Span::styled(if t.st == St::Err { "x" } else { c }.to_string(), st(cc).bold()));
                 }
                 l.push(pad(1));
-                l.push(Span::styled(format!("{:<6} ", t.nm), st(MU)));
-                l.extend(decode(&t.a, ea, a.t, sd, st(FG), &GD));
+                l.push(Span::styled(format!("{:<6} ", t.nm), st(MU())));
+                l.extend(decode(&t.a, ea, a.t, sd, st(FG()), &gd()));
                 let r = if t.st == St::Run {
-                    let mut r = noise(6, a.t, sd + 1, &GD);
-                    r.push(Span::styled(format!("  {:.1}s", a.secs(t)), st(FA)));
+                    let mut r = noise(6, a.t, sd + 1, &gd());
+                    r.push(Span::styled(format!("  {:.1}s", a.secs(t)), st(FA())));
                     r
                 } else if t.st == St::Err {
-                    vec![Span::styled(t.sum.clone(), st(RD))]
+                    vec![Span::styled(t.sum.clone(), st(RD()))]
                 } else if t.k == Tk::Edit {
                     let (ad, de) = t.sum.split_once(' ').unwrap_or((&t.sum, ""));
-                    let mut r = decode(ad, ef, a.t, sd, st(GR), &GD);
+                    let mut r = decode(ad, ef, a.t, sd, st(GR()), &gd());
                     r.push(pad(1));
-                    r.extend(decode(de, ef.saturating_sub(2), a.t, sd + 5, st(RD), &GD));
+                    r.extend(decode(de, ef.saturating_sub(2), a.t, sd + 5, st(RD()), &gd()));
                     r
                 } else {
-                    decode(&t.sum, ef, a.t, sd, st(FA), &GD)
+                    decode(&t.sum, ef, a.t, sd, st(FA()), &gd())
                 };
                 let line = lr(l, r, w);
                 if t.st == St::Err {
                     let el = a.t.saturating_sub(t.t1);
-                    let mut sp: Vec<Span<'static>> = line.spans.into_iter().map(|x| if x.style.fg == Some(FG) || x.style.fg == Some(MU) { Span::styled(x.content, st(RD)) } else { x }).collect();
+                    let mut sp: Vec<Span<'static>> = line.spans.into_iter().map(|x| if x.style.fg == Some(FG()) || x.style.fg == Some(MU()) { Span::styled(x.content, st(RD())) } else { x }).collect();
                     sp = glitch(sp, el, a.t);
                     v.push(Line::from(sp));
                 } else {
@@ -249,16 +251,16 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                     let (mut jd, mut ja) = (0u64, 0u64);
                     for ln in t.body.iter().take(if fx { usize::MAX } else { kk }) {
                         let (n, s, c, mk) = match ln {
-                            Ln::P(s) => (String::new(), s.clone(), if s.contains("FAIL") || s.contains("failed") { RD } else { MU }, ' '),
-                            Ln::A(n, s) => (fnum(*n), s.clone(), GR, '+'),
-                            Ln::D(n, s) => (fnum(*n), s.clone(), RD, '-'),
-                            Ln::C(n, s) => (fnum(*n), s.clone(), FA, ' '),
+                            Ln::P(s) => (String::new(), s.clone(), if s.contains("FAIL") || s.contains("failed") { RD() } else { MU() }, ' '),
+                            Ln::A(n, s) => (fnum(*n), s.clone(), GR(), '+'),
+                            Ln::D(n, s) => (fnum(*n), s.clone(), RD(), '-'),
+                            Ln::C(n, s) => (fnum(*n), s.clone(), FA(), ' '),
                         };
                         let mut s = s;
                         if s.chars().count() > w.saturating_sub(14) {
                             s = s.chars().take(w.saturating_sub(15)).collect::<String>() + "~";
                         }
-                        let mut sp = vec![pad(4), Span::styled("| ", st(FA)), Span::styled(format!("{n:>3} "), st(FA))];
+                        let mut sp = vec![pad(4), Span::styled("| ", st(FA())), Span::styled(format!("{n:>3} "), st(FA()))];
                         match ln {
                             Ln::D(..) if fx => {
                                 let ts = nd + 5 + jd;
@@ -267,10 +269,10 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                                     continue;
                                 }
                                 let (col, md) = if el < ts {
-                                    (RD, Modifier::empty())
+                                    (RD(), Modifier::empty())
                                 } else {
                                     let f = ((el - ts) as f32 / 10.0).min(1.0);
-                                    (grad(&[RD, Color::Rgb(0x7a, 0x55, 0x6e)], f), Modifier::CROSSED_OUT)
+                                    (grad(&[RD(), grad(&[RD(), BASE()], 0.5)], f), Modifier::CROSSED_OUT)
                                 };
                                 sp.push(Span::styled("- ", st(col)));
                                 sp.push(Span::styled(s, st(col).add_modifier(md)));
@@ -283,12 +285,12 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                                 }
                                 let nc = ((el - sa) * 6) as usize;
                                 let cs: Vec<char> = s.chars().collect();
-                                sp.push(Span::styled("+ ", st(GR)));
+                                sp.push(Span::styled("+ ", st(GR())));
                                 if nc >= cs.len() {
-                                    sp.push(Span::styled(s, st(GR)));
+                                    sp.push(Span::styled(s, st(GR())));
                                 } else {
-                                    sp.push(Span::styled(cs[..nc].iter().collect::<String>(), st(GR)));
-                                    sp.push(Span::styled(cs[nc].to_string(), st(WH).bold()));
+                                    sp.push(Span::styled(cs[..nc].iter().collect::<String>(), st(GR())));
+                                    sp.push(Span::styled(cs[nc].to_string(), st(WH()).bold()));
                                 }
                             }
                             _ => {
@@ -304,8 +306,8 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
             B::Ask(k) => match k.ans {
                 None => {
                     let iw = w.min(64) - 4;
-                    let pc = grad(&[PK, Color::Rgb(0x4a, 0x2c, 0x45)], pulse(a.t, 60.0));
-                    v.push(Line::from(vec![pad(2), Span::styled("+- ", st(pc)), Span::styled("permission", st(PK).bold()), Span::styled(format!(" {}+", "-".repeat(iw.saturating_sub(13))), st(pc))]));
+                    let pc = grad(&[PK(), grad(&[PK(), BASE()], 0.75)], pulse(a.t, 60.0));
+                    v.push(Line::from(vec![pad(2), Span::styled("+- ", st(pc)), Span::styled("permission", st(PK()).bold()), Span::styled(format!(" {}+", "-".repeat(iw.saturating_sub(13))), st(pc))]));
                     let row = |sp: Vec<Span<'static>>| {
                         let n = sw(&sp);
                         let mut x = vec![pad(2), Span::styled("| ", st(pc))];
@@ -315,30 +317,30 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                         Line::from(x)
                     };
                     v.push(row(vec![]));
-                    v.push(row(vec![Span::styled(k.cmd.clone(), st(WH).bold())]));
+                    v.push(row(vec![Span::styled(k.cmd.clone(), st(WH()).bold())]));
                     v.push(row(vec![]));
-                    v.push(row(vec![Span::styled("[y]", st(GR).bold()), Span::styled(" allow   ", st(FG)), Span::styled("[n]", st(RD).bold()), Span::styled(" deny   ", st(FG)), Span::styled("[a]", st(LI).bold()), Span::styled(" always allow", st(FG))]));
+                    v.push(row(vec![Span::styled("[y]", st(GR()).bold()), Span::styled(" allow   ", st(FG())), Span::styled("[n]", st(RD()).bold()), Span::styled(" deny   ", st(FG())), Span::styled("[a]", st(LI()).bold()), Span::styled(" always allow", st(FG()))]));
                     v.push(Line::from(vec![pad(2), Span::styled(format!("+{}+", "-".repeat(iw)), st(pc))]));
                 }
                 Some(c) => {
-                    let (t, col) = if c == 'n' { ("denied", RD) } else { ("allowed", GR) };
-                    v.push(lr(vec![pad(2), Span::styled("! ", st(PK).bold()), Span::styled(format!("{:<6}", "ask"), st(MU)), Span::styled(k.cmd.clone(), st(FG))], vec![Span::styled(t, st(col))], w));
+                    let (t, col) = if c == 'n' { ("denied", RD()) } else { ("allowed", GR()) };
+                    v.push(lr(vec![pad(2), Span::styled("! ", st(PK()).bold()), Span::styled(format!("{:<6}", "ask"), st(MU())), Span::styled(k.cmd.clone(), st(FG()))], vec![Span::styled(t, st(col))], w));
                 }
             },
             B::Rc(x, t0) => {
                 let el = a.t.saturating_sub(*t0) * 2;
                 let mut sp = vec![pad(2)];
-                sp.extend(decode(x, el, a.t, i as u64 + 900, st(FA), &GD));
+                sp.extend(decode(x, el, a.t, i as u64 + 900, st(FA()), &gd()));
                 v.push(Line::from(sp));
             }
-            B::Sys(s) => v.push(Line::from(vec![pad(2), Span::styled("- ", st(FA)), Span::styled(s.clone(), st(MU))])),
+            B::Sys(s) => v.push(Line::from(vec![pad(2), Span::styled("- ", st(FA())), Span::styled(s.clone(), st(MU()))])),
         }
     }
     if a.busy && a.ask.is_none() && a.streaming().is_none() && !matches!(a.bs.last(), Some(B::Tl(t)) if t.st == St::Run) {
         v.push(Line::default());
         let mut sp = vec![pad(2)];
-        sp.extend(noise(8, a.t, 99, &GD));
-        sp.push(Span::styled(format!("  thinking  {:.1}s", a.turn_secs()), st(FA)));
+        sp.extend(noise(8, a.t, 99, &gd()));
+        sp.push(Span::styled(format!("  thinking  {:.1}s", a.turn_secs()), st(FA())));
         v.push(Line::from(sp));
     }
     v
@@ -421,7 +423,7 @@ impl V for V1 {
         let mut extra: Vec<Line<'static>> = vec![];
         let mut bt: Vec<Line<'static>> = vec![];
         if let Some(b) = &a.btw {
-            let l = vec![pad(2), Span::styled("btw  ", st(L2).bold()), Span::styled(b.q.clone(), st(MU))];
+            let l = vec![pad(2), Span::styled("btw  ", st(L2()).bold()), Span::styled(b.q.clone(), st(MU()))];
             bt.push(Line::from(l));
             for l in md(&b.a, w - 9, &mdt()) {
                 let mut sp = vec![pad(7)];
@@ -437,7 +439,7 @@ impl V for V1 {
             let us = a.users();
             let n = us.len();
             let lo = sel.saturating_sub(6).min(n.saturating_sub(7));
-            extra.push(Line::from(Span::styled("rewind", st(L2).bold())));
+            extra.push(Line::from(Span::styled("rewind", st(L2()).bold())));
             for (j, &bi) in us.iter().enumerate().skip(lo).take(7) {
                 let t = match a.bs.get(bi) {
                     Some(B::U(t, _)) => t.lines().next().unwrap_or("").to_string(),
@@ -445,7 +447,7 @@ impl V for V1 {
                 };
                 let t: String = if t.chars().count() > w - 8 { t.chars().take(w - 9).collect::<String>() + "…" } else { t };
                 let on = j == sel;
-                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI).bold()), Span::styled(t, if on { st(WH).bold() } else { st(MU) })]));
+                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold()), Span::styled(t, if on { st(WH()).bold() } else { st(MU()) })]));
                 if on {
                     if let Some(o) = opt {
                         let mut sp = vec![pad(4)];
@@ -454,9 +456,9 @@ impl V for V1 {
                                 sp.push(pad(4));
                             }
                             if k == o {
-                                sp.push(Span::styled(format!("[ {l} ]"), st(LI).bold()));
+                                sp.push(Span::styled(format!("[ {l} ]"), st(LI()).bold()));
                             } else {
-                                sp.push(Span::styled(format!("  {l}  "), st(FA)));
+                                sp.push(Span::styled(format!("  {l}  "), st(FA())));
                             }
                         }
                         extra.push(Line::from(sp));
@@ -476,53 +478,69 @@ impl V for V1 {
                 let dw = w.saturating_sub(cw + 4);
                 let d: String = if d.chars().count() > dw { d.chars().take(dw.saturating_sub(1)).collect::<String>() + "…" } else { d.clone() };
                 extra.push(Line::from(vec![
-                    Span::styled(if on { "› " } else { "  " }, st(LI).bold()),
-                    Span::styled(format!("/{c:<w$}", w = cw - 1), if on { st(WH).bold() } else { st(L2) }),
-                    Span::styled(d, st(if on { MU } else { FA })),
+                    Span::styled(if on { "› " } else { "  " }, st(LI()).bold()),
+                    Span::styled(format!("/{c:<w$}", w = cw - 1), if on { st(WH()).bold() } else { st(L2()) }),
+                    Span::styled(d, st(if on { MU() } else { FA() })),
                 ]));
             }
             if mm.len() > 6 {
-                extra.push(Line::from(Span::styled(format!("  {} more", mm.len() - 6), st(FA))));
+                extra.push(Line::from(Span::styled(format!("  {} more", mm.len() - 6), st(FA()))));
+            }
+            extra.push(Line::default());
+        }
+        if let Some(sel) = a.pp {
+            extra.push(Line::from(Span::styled("default permission", st(L2()).bold())));
+            for (j, m) in MODES.iter().enumerate() {
+                let on = j == sel;
+                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold()), Span::styled(m.to_string(), if on { st(WH()).bold() } else { st(MU()) })]));
+            }
+            extra.push(Line::default());
+        }
+        if let Some((sel, _)) = a.tp {
+            extra.push(Line::from(Span::styled("theme", st(L2()).bold())));
+            for (j, t) in pal::THEMES.iter().enumerate() {
+                let on = j == sel;
+                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold()), Span::styled(t.name, if on { st(WH()).bold() } else { st(MU()) })]));
             }
             extra.push(Line::default());
         }
         if let Some((sel, _)) = a.bp {
             let v = noname::bg::avail();
-            extra.push(Line::from(Span::styled("background", st(L2).bold())));
+            extra.push(Line::from(Span::styled("background", st(L2()).bold())));
             let lo = sel.saturating_sub(8).min(v.len().saturating_sub(9));
             for (j, k) in v.iter().enumerate().skip(lo).take(9) {
                 let on = j == sel;
-                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI).bold()), Span::styled(k.to_string(), if on { st(WH).bold() } else { st(MU) })]));
+                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold()), Span::styled(k.to_string(), if on { st(WH()).bold() } else { st(MU()) })]));
             }
             extra.push(Line::default());
         }
         if let Some((all, sel)) = &a.rs {
             let v = a.rhits();
             let sel = (*sel).min(v.len().saturating_sub(1));
-            let hd = vec![Span::styled("resume", st(L2).bold()), Span::styled("  ", st(FA)), Span::styled(if a.rq.is_empty() { "type to search".to_string() } else { a.rq.clone() }, if a.rq.is_empty() { st(FA) } else { st(WH) })];
-            extra.push(lr(hd, vec![Span::styled(format!("{}/{}", v.len(), all.len()), st(FA))], w));
+            let hd = vec![Span::styled("resume", st(L2()).bold()), Span::styled("  ", st(FA())), Span::styled(if a.rq.is_empty() { "type to search".to_string() } else { a.rq.clone() }, if a.rq.is_empty() { st(FA()) } else { st(WH()) })];
+            extra.push(lr(hd, vec![Span::styled(format!("{}/{}", v.len(), all.len()), st(FA()))], w));
             extra.push(Line::default());
             let lo = sel.saturating_sub(5).min(v.len().saturating_sub(6));
             for (j, (_, t, meta)) in v.iter().enumerate().skip(lo).take(6) {
                 let on = j == sel;
                 let tw = w.saturating_sub(4);
                 let t: String = if t.chars().count() > tw { t.chars().take(tw.saturating_sub(1)).collect::<String>() + "…" } else { t.clone() };
-                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI).bold()), Span::styled(t, if on { st(WH).bold() } else { st(FG) })]));
-                extra.push(Line::from(vec![pad(2), Span::styled(meta.clone(), st(if on { MU } else { FA }))]));
+                extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold()), Span::styled(t, if on { st(WH()).bold() } else { st(FG()) })]));
+                extra.push(Line::from(vec![pad(2), Span::styled(meta.clone(), st(if on { MU() } else { FA() }))]));
             }
             if v.is_empty() {
-                extra.push(Line::from(Span::styled("  no match", st(FA))));
+                extra.push(Line::from(Span::styled("  no match", st(FA()))));
             }
             extra.push(Line::default());
         }
         if a.stodo && !a.todo.is_empty() {
             for (s, t) in &a.todo {
                 let (m, c) = match s {
-                    2 => ("[x] ", GR),
-                    1 => ("[>] ", LI),
-                    _ => ("[ ] ", FA),
+                    2 => ("[x] ", GR()),
+                    1 => ("[>] ", LI()),
+                    _ => ("[ ] ", FA()),
                 };
-                extra.push(Line::from(vec![Span::styled(m, st(c)), Span::styled(t.clone(), st(if *s == 2 { MU } else { FG }))]));
+                extra.push(Line::from(vec![Span::styled(m, st(c)), Span::styled(t.clone(), st(if *s == 2 { MU() } else { FG() }))]));
             }
             extra.push(Line::default());
         }
@@ -534,11 +552,11 @@ impl V for V1 {
         let col = |y: u16, hh: u16| Rect { x: x0, y, width: w as u16, height: hh };
 
         let hdr = lr(
-            vec![Span::styled(a.cwd.clone(), st(MU)), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA))],
+            vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))],
             {
-                let mut r = if a.work { vec![Span::styled("work  ", st(PK).bold())] } else { vec![] };
-                r.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI), &GD));
-                r.push(Span::styled(if a.effs.is_empty() { String::new() } else { format!("  {}", a.effs) }, st(FA)));
+                let mut r = if a.work { vec![Span::styled("work  ", st(PK()).bold())] } else { vec![] };
+                r.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI()), &gd()));
+                r.push(Span::styled(if a.effs.is_empty() { String::new() } else { format!("  {}", a.effs) }, st(FA())));
                 r
             },
             w,
@@ -555,7 +573,7 @@ impl V for V1 {
             let y = top + bh / 2 - 3;
             let el = a.t.saturating_sub(a.tc) * 2;
             for (i, l) in lg.iter().enumerate() {
-                let sp = unlig(decode(l, el.saturating_sub(i as u64 * 6), a.t, i as u64 + 50, st(LI), &GD));
+                let sp = unlig(decode(l, el.saturating_sub(i as u64 * 6), a.t, i as u64 + 50, st(LI()), &gd()));
                 f.render_widget(Paragraph::new(Line::from(sp)).alignment(Alignment::Center), col(y + i as u16, 1));
             }
         } else {
@@ -573,20 +591,20 @@ impl V for V1 {
             let pad_top = bh as usize - ls.len();
             f.render_widget(Paragraph::new(ls), col(top + pad_top as u16, bh - pad_top as u16));
             if scr > 0 {
-                f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA))).alignment(Alignment::Right), col(top + bh - 1, 1));
+                f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA()))).alignment(Alignment::Right), col(top + bh - 1, 1));
             }
         }
         let ey = top + bh + 1;
         f.render_widget(Paragraph::new(extra), col(ey, eh));
         let ry = ey + eh;
-        let rule = Span::styled("─".repeat(w), st(FA));
+        let rule = Span::styled("─".repeat(w), st(FA()));
         let el = a.t.saturating_sub(a.ts);
         if a.ts > 0 && el < 20 {
             let head = (el as f32 / 14.0 * (w + 16) as f32) as i64;
             let sp: Vec<Span<'static>> = (0..w as i64)
                 .map(|x| {
                     let d = head - x;
-                    let c = if (0..16).contains(&d) { grad(&[WH, LI, FA], d as f32 / 16.0) } else { FA };
+                    let c = if (0..16).contains(&d) { grad(&[WH(), LI(), FA()], d as f32 / 16.0) } else { FA() };
                     Span::styled("─", st(c))
                 })
                 .collect();
@@ -595,9 +613,9 @@ impl V for V1 {
             f.render_widget(Paragraph::new(rule.clone()), col(ry, 1));
         }
         let iy = ry + 1;
-        let pc = if a.ask.is_some() { PK } else { [LI, CY, GR, RD][a.mode] };
+        let pc = if a.ask.is_some() { PK() } else { [LI(), CY(), GR(), RD()][a.mode] };
         let pg: Vec<Span<'static>> = if a.tm > 0 && a.t.saturating_sub(a.tm) < 9 {
-            noise(1, a.t, 61, &GD)
+            noise(1, a.t, 61, &gd())
         } else {
             vec![Span::styled(["›", "?", "»", "!"][a.mode], st(pc).bold())]
         };
@@ -616,20 +634,20 @@ impl V for V1 {
                     if ch == ' ' || r + 2 < el {
                         sp.push(pad(1));
                     } else if r < el + 2 {
-                        sp.push(Span::styled(nz(a.t, ci as u64).to_string(), st(grad(&GD, (ci % 12) as f32 / 12.0))));
+                        sp.push(Span::styled(nz(a.t, ci as u64).to_string(), st(grad(&gd(), (ci % 12) as f32 / 12.0))));
                     } else {
-                        sp.push(Span::styled(ch.to_string(), st(WH)));
+                        sp.push(Span::styled(ch.to_string(), st(WH())));
                     }
                 }
             } else {
-                sp.push(Span::styled(l.clone(), st(WH)));
+                sp.push(Span::styled(l.clone(), st(WH())));
             }
             if j == 0 {
                 if let Some((rest, _)) = &gh {
-                    sp.push(Span::styled(rest.clone(), st(FA)));
+                    sp.push(Span::styled(rest.clone(), st(FA())));
                 } else if a.inp.is_empty() && !a.busy && a.ask.is_none() {
                     if let Some(x) = &a.sug {
-                        sp.push(Span::styled(x.lines().next().unwrap_or("").to_string(), st(FA).italic()));
+                        sp.push(Span::styled(x.lines().next().unwrap_or("").to_string(), st(FA()).italic()));
                     }
                 }
             }
@@ -658,12 +676,12 @@ impl V for V1 {
         let (h1, h2) = bar(db[1], 10, "▰", "▱");
         let (d1, d2) = bar(db[2], 10, "▰", "▱");
         let l = vec![
-            Span::styled("context ", st(FA)), Span::styled(c1, st(LI)), Span::styled(c2, st(FA)), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG)),
-            pad(3), Span::styled("5h ", st(FA)), Span::styled(h1, st(CY)), Span::styled(h2, st(FA)), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG)),
-            pad(3), Span::styled("week ", st(FA)), Span::styled(d1, st(CY)), Span::styled(d2, st(FA)), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG)),
+            Span::styled("context ", st(FA())), Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG())),
+            pad(3), Span::styled("5h ", st(FA())), Span::styled(h1, st(CY())), Span::styled(h2, st(FA())), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG())),
+            pad(3), Span::styled("week ", st(FA())), Span::styled(d1, st(CY())), Span::styled(d2, st(FA())), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG())),
         ];
         let r = match &a.toast {
-            Some((t, e)) if !t.starts_with("mode") => decode(t, a.t + 60 - e, a.t, 13, st(L2), &GD),
+            Some((t, e)) if !t.starts_with("mode") => decode(t, a.t + 60 - e, a.t, 13, st(L2()), &gd()),
             _ => vec![],
         };
         let full = sw(&l) + sw(&r) + 2 <= w;
@@ -680,5 +698,6 @@ impl V for V1 {
 }
 
 fn main() -> std::io::Result<()> {
+    pal::load();
     run(V1 { db: [0.0; 3], lt: 0, sf: 0.0, bg: None })
 }

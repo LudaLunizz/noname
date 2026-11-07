@@ -23,19 +23,69 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub use ratatui::crossterm::event::{KeyCode as K, KeyEvent as Ke, KeyModifiers as M};
 
+#[allow(non_snake_case)]
 pub mod pal {
     use ratatui::style::Color;
-    pub const FG: Color = Color::Rgb(0xe9, 0xde, 0xfa);
-    pub const WH: Color = Color::Rgb(0xf7, 0xf2, 0xff);
-    pub const MU: Color = Color::Rgb(0xb8, 0xad, 0xd6);
-    pub const FA: Color = Color::Rgb(0x8f, 0x82, 0xae);
-    pub const LI: Color = Color::Rgb(0xb4, 0x97, 0xff);
-    pub const L2: Color = Color::Rgb(0xd0, 0xa9, 0xff);
-    pub const PE: Color = Color::Rgb(0xc5, 0xb3, 0xff);
-    pub const CY: Color = Color::Rgb(0x89, 0xdc, 0xeb);
-    pub const GR: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-    pub const RD: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
-    pub const PK: Color = Color::Rgb(0xff, 0x9f, 0xba);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub struct Theme {
+        pub name: &'static str,
+        pub desc: &'static str,
+        c: [u32; 12],
+    }
+
+    pub const THEMES: [Theme; 4] = [
+        Theme { name: "default", desc: "white, gray, light purple", c: [0xe4e4e8, 0xffffff, 0xb4b4bc, 0x85858f, 0xc3b0ff, 0xd8caff, 0xcdc4e8, 0xa9d6e5, 0xa6e3a1, 0xf38ba8, 0xe6b3ff, 0x161618] },
+        Theme { name: "dracula", desc: "purple, pink, neon", c: [0xf8f8f2, 0xffffff, 0xc3c6dd, 0x7b88b8, 0xbd93f9, 0xff92df, 0xcaa9fa, 0x8be9fd, 0x50fa7b, 0xff5555, 0xff79c6, 0x282a36] },
+        Theme { name: "tokyo-night", desc: "night blue, city lights", c: [0xc0caf5, 0xe0e6ff, 0xa9b1d6, 0x737aa2, 0x7aa2f7, 0xbb9af7, 0xb4c2f0, 0x7dcfff, 0x9ece6a, 0xf7768e, 0xff9e64, 0x1a1b26] },
+        Theme { name: "mocha", desc: "soft pastels on dark roast", c: [0xcdd6f4, 0xeef1fc, 0xbac2de, 0x9399b2, 0xcba6f7, 0xb4befe, 0xf5c2e7, 0x89dceb, 0xa6e3a1, 0xf38ba8, 0xf5c2e7, 0x1e1e2e] },
+    ];
+
+    static CUR: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn cur() -> usize {
+        CUR.load(Ordering::Relaxed)
+    }
+    pub fn set(i: usize) {
+        CUR.store(i.min(THEMES.len() - 1), Ordering::Relaxed);
+    }
+    pub fn find(n: &str) -> Option<usize> {
+        let k = |x: &str| x.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+        let n = k(n);
+        THEMES.iter().position(|t| k(t.name) == n || (n == "catppuccin" && t.name == "mocha") || (n == "tokyo" && t.name == "tokyo-night"))
+    }
+    pub fn file() -> String {
+        let b = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
+        format!("{b}/noname/theme")
+    }
+    pub fn load() {
+        if let Some(i) = std::env::var("NONAME_THEME").ok().or_else(|| std::fs::read_to_string(file()).ok()).and_then(|x| find(&x)) {
+            set(i);
+        }
+    }
+    pub fn save() {
+        let f = file();
+        if let Some(d) = std::path::Path::new(&f).parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&f, THEMES[cur()].name);
+    }
+    fn c(i: usize) -> Color {
+        let v = THEMES[cur()].c[i];
+        Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+    }
+    pub fn FG() -> Color { c(0) }
+    pub fn WH() -> Color { c(1) }
+    pub fn MU() -> Color { c(2) }
+    pub fn FA() -> Color { c(3) }
+    pub fn LI() -> Color { c(4) }
+    pub fn L2() -> Color { c(5) }
+    pub fn PE() -> Color { c(6) }
+    pub fn CY() -> Color { c(7) }
+    pub fn GR() -> Color { c(8) }
+    pub fn RD() -> Color { c(9) }
+    pub fn PK() -> Color { c(10) }
+    pub fn BASE() -> Color { c(11) }
 }
 
 
@@ -197,6 +247,8 @@ pub struct App {
     pub rs: Option<(Vec<(String, String, String)>, usize)>,
     pub rq: String,
     pub bp: Option<(usize, Option<&'static str>)>,
+    pub tp: Option<(usize, usize)>,
+    pub pp: Option<usize>,
     le: u64,
 }
 
@@ -377,6 +429,8 @@ impl App {
             rs: None,
             rq: String::new(),
             bp: None,
+            tp: None,
+            pp: None,
             le: 0,
             tf: false,
         }
@@ -614,8 +668,54 @@ impl App {
         }
     }
 
+    pub fn setdefmode(&mut self, i: usize) {
+        if self.lv.is_some() || self.cx.is_some() {
+            let f = modefile();
+            if let Some(d) = std::path::Path::new(&f).parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = std::fs::write(&f, MODES[i]);
+        }
+        if self.mode != i {
+            self.mode = i;
+            self.tm = self.t.max(1);
+            self.lmode();
+        }
+        self.toast(format!("default permission  {}", MODES[i]));
+    }
+
+    pub fn settheme(&mut self, i: usize) {
+        pal::set(i);
+        self.toast(format!("theme  {}", pal::THEMES[pal::cur()].name));
+        if self.lv.is_some() || self.cx.is_some() {
+            pal::save();
+        }
+    }
+
     pub fn cmd(&mut self, r: &str) {
         let (c0, a0) = r.split_once(' ').unwrap_or((r, ""));
+        if c0 == "default-permission" {
+            let a0 = a0.trim();
+            if a0.is_empty() {
+                self.pp = Some(defmode().unwrap_or(0));
+            } else if let Some(i) = modeidx(a0) {
+                self.setdefmode(i);
+            } else {
+                self.toast(format!("unknown mode  {a0}"));
+            }
+            return;
+        }
+        if c0 == "theme" {
+            let a0 = a0.trim();
+            if a0.is_empty() {
+                self.tp = Some((pal::cur(), pal::cur()));
+            } else if let Some(i) = pal::find(a0) {
+                self.settheme(i);
+            } else {
+                self.toast(format!("unknown theme  {a0}"));
+            }
+            return;
+        }
         if c0 == "background" || c0 == "bg" {
             let a0 = a0.trim();
             if a0.is_empty() {
@@ -742,6 +842,47 @@ impl App {
         let ct = k.modifiers.contains(Km::CONTROL);
         if self.rw.is_some() && !(ct && k.code == KeyCode::Char('c')) {
             self.rwkey(k);
+            return;
+        }
+        if let Some(sel) = self.pp {
+            if ct && k.code == KeyCode::Char('c') {
+                self.quit = true;
+                return;
+            }
+            match k.code {
+                KeyCode::Esc => self.pp = None,
+                KeyCode::Up => self.pp = Some(sel.saturating_sub(1)),
+                KeyCode::Down => self.pp = Some((sel + 1).min(MODES.len() - 1)),
+                KeyCode::Enter => {
+                    self.pp = None;
+                    self.setdefmode(sel);
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some((sel, prev)) = self.tp {
+            if ct && k.code == KeyCode::Char('c') {
+                self.quit = true;
+                return;
+            }
+            let n = pal::THEMES.len();
+            match k.code {
+                KeyCode::Esc => {
+                    pal::set(prev);
+                    self.tp = None;
+                }
+                KeyCode::Up | KeyCode::Down => {
+                    let j = if k.code == KeyCode::Up { sel.saturating_sub(1) } else { (sel + 1).min(n - 1) };
+                    self.tp = Some((j, prev));
+                    pal::set(j);
+                }
+                KeyCode::Enter => {
+                    self.tp = None;
+                    self.settheme(sel);
+                }
+                _ => {}
+            }
             return;
         }
         if let Some((sel, prev)) = self.bp {
@@ -1330,6 +1471,25 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     Ok(())
 }
 
+pub fn modefile() -> String {
+    let b = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
+    format!("{b}/noname/permission")
+}
+
+pub fn modeidx(s: &str) -> Option<usize> {
+    match s.trim().to_lowercase().as_str() {
+        "default" | "ask" | "normal" => Some(0),
+        "plan" => Some(1),
+        "auto" | "acceptedits" | "accept-edits" => Some(2),
+        "bypass" | "bypasspermissions" | "yolo" => Some(3),
+        _ => None,
+    }
+}
+
+pub fn defmode() -> Option<usize> {
+    std::fs::read_to_string(modefile()).ok().and_then(|x| modeidx(&x))
+}
+
 pub fn bgfile() -> String {
     let b = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
     format!("{b}/noname/background")
@@ -1360,6 +1520,10 @@ fn setup<T: V>(v: &mut T, a: &mut App, s: &str) {
     }
     match s {
         "empty" => a.cmd("clear"),
+        "theme" => {
+            a.inp = "/theme".into();
+            a.submit();
+        }
         "run" => {
             a.inp = "make the swipe snap that smooth too".into();
             a.submit();
@@ -1476,6 +1640,7 @@ fn html(b: &Buffer, cur: Option<(u16, u16)>) -> String {
     let a = b.area;
     let pb = std::env::var("NONAME_SHOT_BG").ok();
     let mut s = String::from("<!doctype html><html><head><meta charset=utf-8><style>body{margin:0;background:#0d0a14}#bg{position:relative;display:inline-block;padding:14px 18px;background:radial-gradient(circle at 20% 30%,#5a3d8a 0,transparent 45%),radial-gradient(circle at 80% 70%,#2a4a7a 0,transparent 50%),linear-gradient(135deg,#2b1f45,#1b2440 50%,#3a2040)}#bg:before{content:'';position:absolute;inset:0;background:rgba(26,20,38,.7)}#t{position:relative;font:15px/19px 'CaskaydiaCove Nerd Font Mono',monospace;white-space:pre;color:#e9defa}.k{background:#b497ff;color:#1a1426}</style></head><body><div id=bg><div id=t>");
+    s += &format!("<style>.k{{background:{};color:{}}}#t{{color:{}}}</style>", hex(pal::LI()).unwrap_or_default(), hex(pal::BASE()).unwrap_or_default(), hex(pal::FG()).unwrap_or_default());
     if let Some(c) = &pb {
         s += &format!("<style>body,#bg{{background:{c} !important}}#bg:before{{display:none}}</style>");
     }

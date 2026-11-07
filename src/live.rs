@@ -334,6 +334,13 @@ impl App {
         a.work = TOK.lock().ok().is_some_and(|t| t.is_some());
         a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
         a.br = Command::new("git").args(["branch", "--show-current"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        let mut args = args;
+        if !args.iter().any(|x| x.starts_with("--permission-mode") || x == "--dangerously-skip-permissions") {
+            if let Some(i) = crate::defmode().filter(|i| *i > 0) {
+                args.extend(["--permission-mode".into(), PM[i].into()]);
+                a.mode = i;
+            }
+        }
         let (ch, inp, rx) = spawn(&args)?;
         a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
         a.ctrl("init", json!({"subtype": "initialize", "hooks": null}));
@@ -363,6 +370,9 @@ impl App {
             _ if self.is_codex() => vec![("clear".to_string(), "start a new codex thread".to_string())],
             _ => CMDS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
         };
+        v.retain(|x| x.0 != "theme");
+        v.push(("default-permission".into(), "permission mode new sessions start in".into()));
+        v.push(("theme".into(), crate::pal::THEMES.iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
         v.push(("background".into(), crate::bg::LIST.into()));
         v.push(("resume".into(), "pick an older session in this folder".into()));
         if self.wk.is_some() {

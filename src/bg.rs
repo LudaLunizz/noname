@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Style};
 
-use crate::pal::{CY, LI};
+use crate::pal::{BASE, CY, FA, LI};
 use crate::{grad, hsh, live, pulse};
 
 const NAMES: &[(&str, &str)] = &[
@@ -245,7 +245,7 @@ impl Bg {
                 self.fl = None;
             }
             let (w, h) = (a.width, a.height);
-            let base = Color::Rgb(0x1a, 0x14, 0x26);
+            let base = BASE();
             let put = |b: &mut Buffer, x: i32, y: i32, ch: &str, c: Color| {
                 if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
                     return;
@@ -276,7 +276,7 @@ impl Bg {
                         let f = j as f32 / d.n as f32;
                         let ci = (hsh(d.s ^ y as u64, (t / 4 + j as u64 * 3) / (if j == 0 { 1 } else { 6 })) % CS.len() as u64) as usize;
                         let ch = (CS[ci] as char).to_string();
-                        let c = if j == 0 { grad(&[base, crate::pal::WH], 0.42) } else { grad(&[grad(&[base, LI], 0.34), grad(&[base, CY], 0.18), base], f) };
+                        let c = if j == 0 { grad(&[base, crate::pal::WH()], 0.42) } else { grad(&[grad(&[base, LI()], 0.34), grad(&[base, CY()], 0.18), base], f) };
                         put(b, d.x as i32, y, &ch, c);
                     }
                 }
@@ -296,13 +296,13 @@ impl Bg {
                 for d in &self.ds {
                     let y = d.y.floor() as i32;
                     let x = d.x as i32 - (d.y * 0.35) as i32;
-                    let c = grad(&[base, CY], 0.16 + (d.s % 10) as f32 * 0.012);
+                    let c = grad(&[base, CY()], 0.16 + (d.s % 10) as f32 * 0.012);
                     for j in 0..d.n as i32 {
                         put(b, x + j / 3, y - j, if j == 0 { "/" } else { "'" }, grad(&[c, base], j as f32 / (d.n as f32 + 1.0)));
                     }
                     if y >= h as i32 - 1 {
-                        put(b, x - 1, h as i32 - 1, ".", grad(&[base, CY], 0.12));
-                        put(b, x + 1, h as i32 - 1, ",", grad(&[base, CY], 0.1));
+                        put(b, x - 1, h as i32 - 1, ".", grad(&[base, CY()], 0.12));
+                        put(b, x + 1, h as i32 - 1, ",", grad(&[base, CY()], 0.1));
                     }
                 }
                 if self.fl.is_none() && hsh(t / 30, 99) % 9 == 0 && t % 30 == 0 {
@@ -322,7 +322,7 @@ impl Bg {
                         self.fl = None;
                     } else {
                         let k = if el < 2 || (4..6).contains(&el) { 0.55 } else { 0.2 };
-                        let c = grad(&[base, crate::pal::WH], k);
+                        let c = grad(&[base, crate::pal::WH()], k);
                         for (i, &(x, y)) in v.iter().enumerate() {
                             let p = if i > 0 { v[i - 1].0 } else { x };
                             let ch = if x > p { "\\" } else if x < p { "/" } else { "|" };
@@ -344,7 +344,7 @@ impl Bg {
                         }
                         let tw = pulse(t + h % 200, 80.0 + (h % 60) as f32);
                         let ch = ["·", ".", "+", "*"][(h / 61 % 4) as usize];
-                        let c = grad(&[Color::Rgb(0x2a, 0x22, 0x3c), if h % 3 == 0 { CY } else { LI }], 0.15 + tw * 0.35);
+                        let c = grad(&[grad(&[FA(), BASE()], 0.85), if h % 3 == 0 { CY() } else { LI() }], 0.15 + tw * 0.35);
                         b[(x, y)].set_symbol(ch).set_style(Style::new().fg(c));
                     }
                 }
@@ -401,7 +401,7 @@ impl Bg {
             self.ds.clear();
             self.sn.clear();
         }
-        let base = Color::Rgb(0x1a, 0x14, 0x26);
+        let base = BASE();
         let oc = |x: i32, y: i32| x >= 0 && y >= 0 && x < w as i32 && y < h as i32 && occ[y as usize * w as usize + x as usize];
         let sn = &mut self.sn;
         let mut fall: Vec<(u16, u16)> = vec![];
@@ -455,7 +455,7 @@ impl Bg {
             }
         }
         self.ds = keep;
-        let fc = grad(&[base, crate::pal::WH], 0.34);
+        let fc = grad(&[base, crate::pal::WH()], 0.34);
         for d in &self.ds {
             let (x, y) = (d.x as i32, d.y.floor() as i32);
             if y < 0 || y >= h as i32 || oc(x, y) || oc(x - 1, y) || oc(x + 1, y) {
@@ -463,7 +463,7 @@ impl Bg {
             }
             b[(x as u16, y as u16)].set_symbol(if d.s % 3 == 0 { "*" } else { "." }).set_style(Style::new().fg(fc));
         }
-        let sc = grad(&[base, crate::pal::WH], 0.62);
+        let sc = grad(&[base, crate::pal::WH()], 0.62);
         for (&(x, y), &l) in self.sn.iter() {
             if oc(x as i32, y as i32) {
                 continue;
@@ -472,7 +472,7 @@ impl Bg {
         }
         if matches!(month(), 10 | 11) && h > 2 {
             let y = 1u16;
-            let cs = [crate::pal::RD, crate::pal::GR, CY, crate::pal::PK, LI, crate::pal::WH];
+            let cs = [crate::pal::RD(), crate::pal::GR(), CY(), crate::pal::PK(), LI(), crate::pal::WH()];
             for x in 0..w {
                 if oc(x as i32, y as i32) {
                     continue;
@@ -483,7 +483,7 @@ impl Bg {
                     let tw = pulse(t + hsh(k, 3) % 90, 45.0 + (hsh(k, 9) % 30) as f32);
                     b[(x, y)].set_symbol("●").set_style(Style::new().fg(grad(&[base, c], 0.35 + tw * 0.55)));
                 } else {
-                    b[(x, y)].set_symbol("‿").set_style(Style::new().fg(grad(&[base, crate::pal::FA], 0.45)));
+                    b[(x, y)].set_symbol("‿").set_style(Style::new().fg(grad(&[base, crate::pal::FA()], 0.45)));
                 }
             }
         }
