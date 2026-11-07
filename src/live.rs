@@ -64,6 +64,14 @@ fn track(c: &Child) {
     }
 }
 
+pub(crate) fn reap_pub(c: &mut Child) {
+    reap(c)
+}
+
+pub(crate) fn guard_pub(c: &mut Command) {
+    guard(c);
+}
+
 fn reap(c: &mut Child) {
     if let Ok(mut k) = KIDS.lock() {
         k.retain(|x| *x != c.id() as i32);
@@ -318,6 +326,7 @@ impl App {
     pub fn cmds(&self) -> Vec<(String, String)> {
         let mut v = match &self.lv {
             Some(l) if !l.cmds.is_empty() => l.cmds.clone(),
+            _ if self.is_codex() => vec![("clear".to_string(), "start a new codex thread".to_string())],
             _ => CMDS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
         };
         v.push(("background".into(), crate::bg::LIST.into()));

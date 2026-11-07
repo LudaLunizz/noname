@@ -73,7 +73,10 @@ noname                  # new session in the current folder
 noname -c               # continue the latest session here
 noname -r <id>          # resume a specific session
 noname --model sonnet   # any other claude flag is passed through
+noname --codex          # use OpenAI Codex as the engine instead
 ```
+
+With `--codex` (or `NONAME_ENGINE=codex`), noname drives `codex exec --json` and resumes the same thread on every message. Plan mode maps to a read-only sandbox, bypass mode to no sandbox. Permission prompts, `/btw`, rewind and usage limits are Claude Code only.
 
 The window title shows `noname · <folder>`, plus `working` or `waiting` while Claude is busy or needs you.
 
@@ -136,6 +139,21 @@ kitty ── noname ──┬── claude -p  (stream-json, control protocol)
 
 noname starts `claude` in stream-json mode with partial messages, renders every event with ratatui and answers permission requests over the control protocol. Rewind uses Claude Code's file checkpoints and `--resume-session-at`. Signal handling, process groups and a parent death signal make sure nothing outlives the window.
 
+## Licenses
+
+All Rust dependencies are permissive (MIT, Apache-2.0, Zlib, Unlicense, BSL-1.0, Unicode-3.0).
+
+noname bundles no other programs. Claude Code (proprietary, Anthropic), Codex (Apache-2.0) and the background programs are started as separate processes from your own installation:
+
+| program | license | | program | license |
+|---|---|---|---|---|
+| cava | MIT | | cmatrix | GPL-3.0 |
+| lavat | MIT | | unimatrix | GPL-3.0 |
+| pipes.sh | MIT | | neo-matrix | GPL-3.0 |
+| terminal-rain | MIT | | weathr | GPL-3.0 |
+| tty-clock | BSD | | globe | GPL-3.0 |
+| asciiquarium | GPL-2.0+ | | cbonsai | GPL-3.0 |
+
 ## Development
 
 ```sh
@@ -149,4 +167,5 @@ NONAME_SHOT=<file.html> noname          # write the live screen to html every ha
 | `src/main.rs` | layout and rendering |
 | `src/lib.rs` | app state, input, mock session, markdown, effects |
 | `src/live.rs` | Claude Code process and protocol |
+| `src/codex.rs` | Codex engine |
 | `src/bg.rs` | backgrounds |

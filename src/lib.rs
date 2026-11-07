@@ -1,4 +1,5 @@
 pub mod bg;
+mod codex;
 mod live;
 
 use std::cell::Cell;
@@ -186,6 +187,7 @@ pub struct App {
     pub mname: String,
     pub effs: String,
     lv: Option<live::Lv>,
+    cx: Option<codex::Cx>,
     pub bgw: Option<&'static str>,
     pub rw: Option<(usize, Option<usize>)>,
     pub sug: Option<String>,
@@ -363,6 +365,7 @@ impl App {
             mname: MODELS[0].into(),
             effs: EFF[2].into(),
             lv: None,
+            cx: None,
             bgw: None,
             rw: None,
             sug: None,
@@ -413,6 +416,10 @@ impl App {
         }
         if self.lv.is_some() {
             self.pump();
+            return;
+        }
+        if self.cx.is_some() {
+            self.cpump();
             return;
         }
         if self.ask.is_some() {
@@ -518,6 +525,10 @@ impl App {
     }
 
     pub fn stop(&mut self) {
+        if self.cx.is_some() {
+            self.cstop();
+            return;
+        }
         if self.lv.is_some() {
             self.lstop();
             return;
@@ -565,6 +576,10 @@ impl App {
             self.lsubmit(s);
             return;
         }
+        if self.cx.is_some() {
+            self.csubmit(s);
+            return;
+        }
         if !self.busy {
             self.t0 = self.t;
         }
@@ -586,7 +601,7 @@ impl App {
             None => self.toast("background  off"),
         }
         self.bgw = k;
-        if self.lv.is_some() {
+        if self.lv.is_some() || self.cx.is_some() {
             let f = bgfile();
             if let Some(d) = std::path::Path::new(&f).parent() {
                 let _ = std::fs::create_dir_all(d);
@@ -614,6 +629,10 @@ impl App {
         }
         if self.lv.is_some() {
             self.lcmd(r);
+            return;
+        }
+        if self.cx.is_some() {
+            self.ccmd(r);
             return;
         }
         let (c, arg) = r.split_once(' ').unwrap_or((r, ""));
@@ -1242,7 +1261,15 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
 
 fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut a = if std::env::var("NONAME_MOCK").is_ok() { App::new() } else { App::live(args)? };
+    let cx = args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
+    let args: Vec<String> = args.into_iter().filter(|x| x != "--codex").collect();
+    let mut a = if std::env::var("NONAME_MOCK").is_ok() {
+        App::new()
+    } else if cx {
+        App::codex(args)?
+    } else {
+        App::live(args)?
+    };
     let mut lt = String::new();
     if let Ok(mut sg) = signal_hook::iterator::Signals::new([signal_hook::consts::SIGHUP, signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT]) {
         std::thread::spawn(move || {
