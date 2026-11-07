@@ -1266,6 +1266,12 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 break;
             }
         }
+        if let Ok(cy) = std::env::var("NONAME_BGCYCLE") {
+            let v: Vec<&str> = cy.split(',').collect();
+            if a.t % 30 == 0 && !v.is_empty() {
+                a.bgw = bg::canon(v[(a.t / 30) as usize % v.len()]);
+            }
+        }
         a.step();
     }
     Ok(())
@@ -1415,7 +1421,11 @@ fn esc(s: &str) -> String {
 
 fn html(b: &Buffer, cur: Option<(u16, u16)>) -> String {
     let a = b.area;
+    let pb = std::env::var("NONAME_SHOT_BG").ok();
     let mut s = String::from("<!doctype html><html><head><meta charset=utf-8><style>body{margin:0;background:#0d0a14}#bg{position:relative;display:inline-block;padding:14px 18px;background:radial-gradient(circle at 20% 30%,#5a3d8a 0,transparent 45%),radial-gradient(circle at 80% 70%,#2a4a7a 0,transparent 50%),linear-gradient(135deg,#2b1f45,#1b2440 50%,#3a2040)}#bg:before{content:'';position:absolute;inset:0;background:rgba(26,20,38,.7)}#t{position:relative;font:15px/19px 'CaskaydiaCove Nerd Font Mono',monospace;white-space:pre;color:#e9defa}.k{background:#b497ff;color:#1a1426}</style></head><body><div id=bg><div id=t>");
+    if let Some(c) = &pb {
+        s += &format!("<style>body,#bg{{background:{c} !important}}#bg:before{{display:none}}</style>");
+    }
     for y in 0..a.height {
         let mut x = 0;
         let mut run = String::new();

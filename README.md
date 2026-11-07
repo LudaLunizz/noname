@@ -13,7 +13,7 @@
 [![Claude Code](https://img.shields.io/badge/engine-Claude%20Code-d0a9ff?style=flat-square)](https://claude.com/claude-code)
 [![kitty](https://img.shields.io/badge/terminal-kitty-a6e3a1?style=flat-square)](https://sw.kovidgoyal.net/kitty)
 
-<img src="assets/demo.gif" width="860">
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.gif"><source media="(prefers-color-scheme: light)" srcset="assets/demo-light.gif"><img src="assets/demo-dark.gif" width="860"></picture>
 
 </div>
 
@@ -122,8 +122,8 @@ Type a name on its own and press `enter`, or open the picker with `/background` 
 External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background`.
 
 <p align="center">
-<img src="assets/start.png" width="420">
-<img src="assets/commands.png" width="420">
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/start-dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/start-light.png"><img src="assets/start-dark.png" width="420"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/commands-dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/commands-light.png"><img src="assets/commands-dark.png" width="420"></picture>
 </p>
 
 ## How it works
