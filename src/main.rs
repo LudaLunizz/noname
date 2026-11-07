@@ -488,6 +488,20 @@ impl V for V1 {
             }
             extra.push(Line::default());
         }
+        if let Some(sel) = a.ns {
+            extra.push(Line::from(Span::styled("noname", st(L2()).bold())));
+            let rows = a.nrows();
+            let cw = rows.iter().map(|r| r.0.len()).max().unwrap_or(0) + 3;
+            for (j, (k, v)) in rows.iter().enumerate() {
+                let on = j == sel;
+                extra.push(Line::from(vec![
+                    Span::styled(if on { "› " } else { "  " }, st(LI()).bold()),
+                    Span::styled(format!("{k:<cw$}"), if on { st(WH()).bold() } else { st(MU()) }),
+                    Span::styled(v.clone(), st(if on { L2() } else { FA() })),
+                ]));
+            }
+            extra.push(Line::default());
+        }
         if let Some(sel) = a.pp {
             extra.push(Line::from(Span::styled("default permission", st(L2()).bold())));
             for (j, m) in MODES.iter().enumerate() {

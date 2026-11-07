@@ -1,5 +1,6 @@
 pub mod bg;
 pub mod sys;
+pub mod upd;
 mod codex;
 mod live;
 
@@ -249,6 +250,10 @@ pub struct App {
     pub bp: Option<(usize, Option<&'static str>)>,
     pub tp: Option<(usize, usize)>,
     pub pp: Option<usize>,
+    pub ns: Option<usize>,
+    pub upr: Option<std::sync::mpsc::Receiver<upd::Up>>,
+    pub ups: String,
+    pub upf: bool,
     le: u64,
 }
 
@@ -431,6 +436,10 @@ impl App {
             bp: None,
             tp: None,
             pp: None,
+            ns: None,
+            upr: None,
+            ups: String::new(),
+            upf: false,
             le: 0,
             tf: false,
         }
@@ -460,6 +469,31 @@ impl App {
 
     pub fn step(&mut self) {
         self.t += 1;
+        if let Some(r) = &self.upr {
+            if let Ok(u) = r.try_recv() {
+                self.upr = None;
+                let f = self.upf;
+                self.upf = false;
+                match u {
+                    upd::Up::Current => {
+                        self.ups = "up to date".into();
+                        if f {
+                            self.toast("noname is up to date");
+                        }
+                    }
+                    upd::Up::Ready(r) => {
+                        self.ups = format!("{r} installed, restart to use");
+                        self.bs.push(B::Sys(format!("noname updated to {r}  ·  restart to use it")));
+                    }
+                    upd::Up::Skip(m) | upd::Up::Fail(m) => {
+                        if f {
+                            self.toast(format!("update  {m}"));
+                        }
+                        self.ups = m;
+                    }
+                }
+            }
+        }
         if let Some(b) = &mut self.btw {
             if !b.done() {
                 let mut r = b.full[b.a.len()..].to_string();
@@ -668,6 +702,25 @@ impl App {
         }
     }
 
+    pub fn upcheck(&mut self, force: bool) {
+        if self.upr.is_some() {
+            return;
+        }
+        self.upf = force;
+        self.ups = "checking".into();
+        self.upr = Some(upd::check(force));
+    }
+
+    pub fn nrows(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("auto-update", if upd::enabled() { "on" } else { "off" }.into()),
+            ("theme", pal::THEMES[pal::cur()].name.into()),
+            ("default permission", MODES[defmode().unwrap_or(0)].into()),
+            ("background", self.bgw.unwrap_or("off").into()),
+            ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
+        ]
+    }
+
     pub fn setdefmode(&mut self, i: usize) {
         if self.lv.is_some() || self.cx.is_some() {
             let f = modefile();
@@ -694,6 +747,10 @@ impl App {
 
     pub fn cmd(&mut self, r: &str) {
         let (c0, a0) = r.split_once(' ').unwrap_or((r, ""));
+        if c0 == "noname" {
+            self.ns = Some(0);
+            return;
+        }
         if c0 == "default-permission" {
             let a0 = a0.trim();
             if a0.is_empty() {
@@ -842,6 +899,40 @@ impl App {
         let ct = k.modifiers.contains(Km::CONTROL);
         if self.rw.is_some() && !(ct && k.code == KeyCode::Char('c')) {
             self.rwkey(k);
+            return;
+        }
+        if let Some(sel) = self.ns {
+            if ct && k.code == KeyCode::Char('c') {
+                self.quit = true;
+                return;
+            }
+            let n = self.nrows().len();
+            match k.code {
+                KeyCode::Esc => self.ns = None,
+                KeyCode::Up => self.ns = Some(sel.saturating_sub(1)),
+                KeyCode::Down => self.ns = Some((sel + 1).min(n - 1)),
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
+                    0 => {
+                        let on = !upd::enabled();
+                        upd::set_enabled(on);
+                        self.toast(format!("auto-update  {}", if on { "on" } else { "off" }));
+                    }
+                    1 => {
+                        self.ns = None;
+                        self.cmd("theme");
+                    }
+                    2 => {
+                        self.ns = None;
+                        self.cmd("default-permission");
+                    }
+                    3 => {
+                        self.ns = None;
+                        self.cmd("background");
+                    }
+                    _ => self.upcheck(true),
+                },
+                _ => {}
+            }
             return;
         }
         if let Some(sel) = self.pp {
@@ -1418,6 +1509,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     };
     let mut lt = String::new();
     sys::on_close(live::killall);
+    upd::cleanup();
+    if std::env::var("NONAME_MOCK").is_err() && upd::enabled() && upd::due() {
+        a.upcheck(false);
+    }
     while !a.quit {
         a.cp.set(None);
         let cf = term.draw(|f| v.draw(f, &a))?;

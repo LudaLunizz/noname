@@ -90,6 +90,10 @@ pub(crate) fn untrack_pid(id: i32) {
     }
 }
 
+pub(crate) fn track_child(c: &Child) {
+    track(c)
+}
+
 fn track(c: &Child) {
     crate::sys::adopt(c);
     if let Ok(mut k) = KIDS.lock() {
@@ -365,6 +369,7 @@ impl App {
             _ => CMDS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
         };
         v.retain(|x| x.0 != "theme");
+        v.push(("noname".into(), "noname settings".into()));
         v.push(("default-permission".into(), "permission mode new sessions start in".into()));
         v.push(("theme".into(), crate::pal::THEMES.iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
         v.push(("background".into(), crate::bg::LIST.into()));
