@@ -36,7 +36,7 @@ fn one(s: &str, n: usize) -> String {
 }
 
 fn unwrap(c: &str) -> String {
-    for p in ["bash -lc ", "/bin/bash -lc ", "bash -c ", "sh -c ", "zsh -lc "] {
+    for p in ["bash -lc ", "/bin/bash -lc ", "bash -c ", "sh -c ", "zsh -lc ", "powershell.exe -Command ", "powershell -Command ", "pwsh -Command ", "pwsh.exe -Command ", "cmd /c ", "cmd.exe /c "] {
         if let Some(r) = c.strip_prefix(p) {
             let r = r.trim();
             if r.len() >= 2 && ((r.starts_with('"') && r.ends_with('"')) || (r.starts_with('\'') && r.ends_with('\''))) {
@@ -49,7 +49,7 @@ fn unwrap(c: &str) -> String {
 }
 
 fn cfg_model() -> String {
-    let h = std::env::var("CODEX_HOME").unwrap_or_else(|_| format!("{}/.codex", std::env::var("HOME").unwrap_or_default()));
+    let h = std::env::var("CODEX_HOME").unwrap_or_else(|_| format!("{}/.codex", crate::sys::home()));
     std::fs::read_to_string(format!("{h}/config.toml"))
         .ok()
         .and_then(|f| f.lines().find(|l| l.trim_start().starts_with("model ") || l.trim_start().starts_with("model=")).map(|l| l.split('=').nth(1).unwrap_or("").trim().trim_matches('"').to_string()))
@@ -67,7 +67,7 @@ impl App {
         a.d7 = -1.0;
         a.cwd = {
             let c = std::env::current_dir()?.to_string_lossy().to_string();
-            let h = std::env::var("HOME").unwrap_or_default();
+            let h = crate::sys::home();
             if !h.is_empty() && c.starts_with(&h) { format!("~{}", &c[h.len()..]) } else { c }
         };
         a.br = Command::new("git").args(["branch", "--show-current"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
@@ -110,7 +110,7 @@ impl App {
         let mode = self.mode;
         let t = self.t;
         let Some(c) = &mut self.cx else { return };
-        let mut cmd = Command::new("codex");
+        let mut cmd = Command::new(crate::sys::bin("codex"));
         cmd.arg("exec");
         let resume = c.tid.is_some() || c.last;
         if resume {

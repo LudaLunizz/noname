@@ -67,6 +67,10 @@ cargo install --path .
 - Rust 1.85 or newer
 - kitty is recommended, any truecolor terminal works
 
+**Windows**
+
+Works in PowerShell inside Windows Terminal. Install Rust from [rustup.rs](https://rustup.rs), then run the same three commands in PowerShell. noname finds `claude.exe` from the native installer as well as `claude.cmd` from npm. Child processes run in a job object, so closing the tab also ends Claude and its MCP servers. Only the built-in backgrounds are available, and `/switch` is not.
+
 ## Usage
 
 ```sh
@@ -107,6 +111,8 @@ Every Claude Code command and skill is available. noname adds or replaces these:
 | `/resume` | pick an older session of this folder |
 | `/model` | cycle models |
 | `/background` | open the background picker |
+| `/theme` | pick a color theme: `default`, `dracula`, `tokyo-night`, `mocha` |
+| `/default-permission` | pick the permission mode new sessions start in |
 | `/clear` | start a fresh session |
 | `/switch` | swap between personal and work account, same session (needs a work token from `claude setup-token` in the keyring under `NONAME_WORK_TOKEN`) |
 
@@ -125,7 +131,7 @@ Type a name on its own and press `enter`, or open the picker with `/background` 
 | `globe` | rotating globe | `snow` | snow that settles on text, built in |
 | `off` | nothing | | |
 
-`stars`, `matrix`, `rain` and `snow` are part of noname. Snow piles up on letters and lines and slides off when they move; in November and December a string of lights hangs across the top. The others are optional programs you install yourself; noname finds them in `PATH` and common folders like `~/.cargo/bin`, lists only installed ones in the picker and prints the install command for missing ones. External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background`.
+`stars`, `matrix`, `rain` and `snow` are part of noname. Snow piles up on letters and lines and slides off when they move; in November and December a string of lights hangs across the top. The others are optional programs you install yourself; noname finds them in `PATH` and common folders like `~/.cargo/bin`, lists only installed ones in the picker and prints the install command for missing ones. External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background` (`%APPDATA%\noname` on Windows).
 
 <p align="center">
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/start-dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/start-light.png"><img src="assets/start-dark.png" width="420"></picture>

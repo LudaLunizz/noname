@@ -1,4 +1,5 @@
 pub mod bg;
+pub mod sys;
 mod codex;
 mod live;
 
@@ -55,8 +56,7 @@ pub mod pal {
         THEMES.iter().position(|t| k(t.name) == n || (n == "catppuccin" && t.name == "mocha") || (n == "tokyo" && t.name == "tokyo-night"))
     }
     pub fn file() -> String {
-        let b = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-        format!("{b}/noname/theme")
+        crate::sys::cfgfile("theme")
     }
     pub fn load() {
         if let Some(i) = std::env::var("NONAME_THEME").ok().or_else(|| std::fs::read_to_string(file()).ok()).and_then(|x| find(&x)) {
@@ -1400,6 +1400,7 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     restore()?;
     if let Err(e) = &r {
         eprintln!("noname: {e}");
+        std::process::exit(1);
     }
     r
 }
@@ -1416,14 +1417,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         App::live(args)?
     };
     let mut lt = String::new();
-    if let Ok(mut sg) = signal_hook::iterator::Signals::new([signal_hook::consts::SIGHUP, signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT]) {
-        std::thread::spawn(move || {
-            if sg.forever().next().is_some() {
-                live::killall();
-                unsafe { libc::_exit(0) };
-            }
-        });
-    }
+    sys::on_close(live::killall);
     while !a.quit {
         a.cp.set(None);
         let cf = term.draw(|f| v.draw(f, &a))?;
@@ -1472,8 +1466,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
 }
 
 pub fn modefile() -> String {
-    let b = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-    format!("{b}/noname/permission")
+    sys::cfgfile("permission")
 }
 
 pub fn modeidx(s: &str) -> Option<usize> {
@@ -1491,8 +1484,7 @@ pub fn defmode() -> Option<usize> {
 }
 
 pub fn bgfile() -> String {
-    let b = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-    format!("{b}/noname/background")
+    sys::cfgfile("background")
 }
 
 fn ttl(a: &App) -> String {

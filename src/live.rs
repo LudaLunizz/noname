@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
@@ -38,6 +37,9 @@ fn tsvc() -> String {
 
 pub fn work_token() -> Option<String> {
     let s = tsvc();
+    if cfg!(windows) {
+        return None;
+    }
     let o = if cfg!(target_os = "macos") {
         Command::new("security").args(["find-generic-password", "-s", &s, "-w"]).stderr(Stdio::null()).output().ok()?
     } else {
@@ -61,16 +63,18 @@ fn tokenv(c: &mut Command) {
 
 pub fn killall() {
     let ks = KIDS.lock().map(|k| k.clone()).unwrap_or_default();
-    for k in &ks {
-        unsafe {
-            libc::kill(-k, libc::SIGTERM);
+    if cfg!(windows) {
+        for k in &ks {
+            crate::sys::kill(*k);
         }
+        return;
+    }
+    for k in &ks {
+        crate::sys::term(*k);
     }
     std::thread::sleep(std::time::Duration::from_millis(400));
     for k in &ks {
-        unsafe {
-            libc::kill(-k, libc::SIGKILL);
-        }
+        crate::sys::kill(*k);
     }
 }
 
@@ -87,6 +91,7 @@ pub(crate) fn untrack_pid(id: i32) {
 }
 
 fn track(c: &Child) {
+    crate::sys::adopt(c);
     if let Ok(mut k) = KIDS.lock() {
         k.push(c.id() as i32);
     }
@@ -104,30 +109,19 @@ fn reap(c: &mut Child) {
     if let Ok(mut k) = KIDS.lock() {
         k.retain(|x| *x != c.id() as i32);
     }
-    unsafe {
-        libc::kill(-(c.id() as i32), libc::SIGTERM);
-    }
+    crate::sys::term(c.id() as i32);
     for _ in 0..20 {
         if matches!(c.try_wait(), Ok(Some(_))) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    unsafe {
-        libc::kill(-(c.id() as i32), libc::SIGKILL);
-    }
+    crate::sys::kill(c.id() as i32);
     let _ = c.wait();
 }
 
 fn guard(c: &mut Command) -> &mut Command {
-    unsafe {
-        c.pre_exec(|| {
-            #[cfg(target_os = "linux")]
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
-    }
-    c.process_group(0)
+    crate::sys::guard(c)
 }
 
 impl Drop for Lv {
@@ -159,7 +153,7 @@ fn rd(r: impl io::Read + Send + 'static) -> Receiver<Value> {
 }
 
 fn spawn(args: &[String]) -> io::Result<(Child, ChildStdin, Receiver<Value>)> {
-    let mut cm = Command::new("claude");
+    let mut cm = Command::new(crate::sys::bin("claude"));
     tokenv(&mut cm);
     let mut c = guard(&mut cm)
         .args([
@@ -201,9 +195,9 @@ fn mnm(id: &str) -> String {
 }
 
 fn rel(p: &str) -> String {
-    let h = std::env::var("HOME").unwrap_or_default();
+    let h = crate::sys::home();
     let cwd = std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
-    if let Some(r) = p.strip_prefix(&format!("{cwd}/")) {
+    if let Some(r) = p.strip_prefix(&format!("{cwd}{}", std::path::MAIN_SEPARATOR)) {
         return r.to_string();
     }
     if !h.is_empty() {
@@ -295,7 +289,7 @@ fn mk(name: &str, i: &Value) -> Tool {
 }
 
 fn pdir(cwd: &str) -> String {
-    let base = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{}/.claude", std::env::var("HOME").unwrap_or_default()));
+    let base = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{}/.claude", crate::sys::home()));
     let esc: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     format!("{base}/projects/{esc}")
 }
@@ -341,7 +335,7 @@ impl App {
                 a.mode = i;
             }
         }
-        let (ch, inp, rx) = spawn(&args)?;
+        let (ch, inp, rx) = spawn(&args).map_err(|e| if e.kind() == io::ErrorKind::NotFound { io::Error::new(e.kind(), "claude not found, install Claude Code first: https://claude.com/claude-code") } else { e })?;
         a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
         a.ctrl("init", json!({"subtype": "initialize", "hooks": null}));
         let ar = a.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
@@ -465,7 +459,7 @@ impl App {
 
     fn lbtw(&mut self, q: &str) {
         let sid = self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default();
-        let mut c = Command::new("claude");
+        let mut c = Command::new(crate::sys::bin("claude"));
         c.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--tools", ""]);
         if !sid.is_empty() {
             c.args(["--resume", &sid, "--fork-session"]);

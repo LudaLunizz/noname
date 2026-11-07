@@ -1,8 +1,15 @@
+#[cfg(unix)]
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
+#[cfg(unix)]
+use std::io::Read;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use ratatui::buffer::Buffer;
@@ -73,6 +80,9 @@ fn has(b: &str) -> bool {
 }
 
 pub fn hint(k: &str) -> String {
+    if cfg!(windows) {
+        return "only the built-in backgrounds work on windows: stars matrix rain snow".into();
+    }
     let (ar, de, br) = pkg(k);
     if k == "globe" {
         return "cargo install globe-cli".into();
@@ -98,15 +108,7 @@ pub fn hint(k: &str) -> String {
 }
 
 pub fn which(b: &str) -> Option<std::path::PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let h = std::env::var("HOME").unwrap_or_default();
-    let mut ds: Vec<String> = std::env::var("PATH").unwrap_or_default().split(':').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
-    for d in [format!("{h}/.cargo/bin"), format!("{h}/.local/bin"), format!("{h}/bin"), "/usr/local/bin".into(), "/usr/games".into(), "/usr/local/games".into(), "/opt/homebrew/bin".into(), "/home/linuxbrew/.linuxbrew/bin".into(), "/snap/bin".into()] {
-        if !ds.contains(&d) {
-            ds.push(d);
-        }
-    }
-    ds.into_iter().map(|d| std::path::Path::new(&d).join(b)).find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+    crate::sys::which(b)
 }
 
 pub const LIST: &str = "stars matrix rain snow cava lavat pipes asciiquarium cbonsai unimatrix neo-matrix tty-clock weathr globe";
@@ -117,9 +119,10 @@ pub fn canon(s: &str) -> Option<&'static str> {
 }
 
 pub fn exists(k: &str) -> bool {
-    NATIVE.contains(&k) || which(k).is_some()
+    NATIVE.contains(&k) || (cfg!(unix) && which(k).is_some())
 }
 
+#[cfg(unix)]
 fn argv(k: &'static str) -> Vec<&'static str> {
     match k {
         "cbonsai" => vec!["cbonsai", "-S"],
@@ -133,6 +136,7 @@ fn argv(k: &'static str) -> Vec<&'static str> {
 
 struct Pr {
     ch: Child,
+    #[cfg(unix)]
     m: OwnedFd,
     ps: Arc<Mutex<vt100::Parser>>,
     sz: (u16, u16),
@@ -157,6 +161,7 @@ pub struct Bg {
     sn: std::collections::HashMap<(u16, u16), u8>,
 }
 
+#[cfg(unix)]
 fn ws(r: u16, c: u16) -> libc::winsize {
     libc::winsize { ws_row: r, ws_col: c, ws_xpixel: 0, ws_ypixel: 0 }
 }
@@ -166,6 +171,17 @@ impl Bg {
         if NATIVE.contains(&name) {
             return Ok(Bg { name, pr: None, ds: vec![], sz: (0, 0), lt: 0, fl: None, sn: Default::default() });
         }
+        #[cfg(windows)]
+        {
+            let _ = (rows, cols);
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "external backgrounds need a unix pty"));
+        }
+        #[cfg(unix)]
+        Self::ext(name, rows, cols)
+    }
+
+    #[cfg(unix)]
+    fn ext(name: &'static str, rows: u16, cols: u16) -> io::Result<Bg> {
         let (mut m, mut s) = (0, 0);
         let w = ws(rows, cols);
         if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) } != 0 {
@@ -217,8 +233,9 @@ impl Bg {
             return;
         }
         p.sz = (r, c);
-        let w = ws(r, c);
+        #[cfg(unix)]
         unsafe {
+            let w = ws(r, c);
             libc::ioctl(p.m.as_raw_fd(), libc::TIOCSWINSZ as _, &w);
         }
         if let Ok(mut x) = p.ps.lock() {
@@ -382,12 +399,7 @@ impl Bg {
 }
 
 fn month() -> i32 {
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm.tm_mon
-    }
+    crate::sys::month()
 }
 
 impl Bg {
@@ -495,19 +507,14 @@ impl Drop for Bg {
         if let Some(p) = &mut self.pr {
             let id = p.ch.id() as i32;
             live::untrack_pid(id);
-            unsafe {
-                libc::kill(-id, libc::SIGTERM);
-                libc::kill(id, libc::SIGTERM);
-            }
+            crate::sys::term(id);
             for _ in 0..10 {
                 if matches!(p.ch.try_wait(), Ok(Some(_))) {
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            unsafe {
-                libc::kill(-id, libc::SIGKILL);
-            }
+            crate::sys::kill(id);
             let _ = p.ch.wait();
         }
     }
