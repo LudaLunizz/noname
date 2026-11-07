@@ -333,7 +333,7 @@ fn hist0() -> Vec<B> {
         B::Tl(Tool { t1: 4, ..tl(Tk::Grep, "fn tick", "3 matches", vec![p("src/feed.rs:41    pub fn tick(&mut self) {"), p("src/app.rs:88        self.feed.tick();"), p("src/swipe.rs:17    pub fn tick(&mut self) {")]) }),
         B::T("Found it. `Feed::tick` moves the offset by a fixed amount per frame:\n\n```rust\nself.off += 0.18;\n```\n\nAt 144 Hz that runs 2.4x faster than at 60 Hz, and since `poll` returns irregularly, it jumps. Switching to **delta time**.".into()),
         B::Tl(Tool { t1: 12, ..tl(Tk::Edit, "src/feed.rs", "+3 -2", edit1()) }),
-        B::Tl(Tool { t1: 254, ..tl(Tk::Bash, "cargo build --release", "ok", vec![p("   Compiling rusttok v0.4.1 (/home/netter/projects/rusttok)"), p("    Finished `release` profile [optimized] target(s) in 8.42s")]) }),
+        B::Tl(Tool { t1: 254, ..tl(Tk::Bash, "cargo build --release", "ok", vec![p("   Compiling rusttok v0.4.1 (/home/you/projects/rusttok)"), p("    Finished `release` profile [optimized] target(s) in 8.42s")]) }),
         B::T("Done. Scrolling is now framerate independent and eases out instead of stopping hard. Try it with `cargo run --release`.".into()),
         B::Rc(rcfmt(12.4, 18_200, 0.08, 0.0), 0),
     ]
