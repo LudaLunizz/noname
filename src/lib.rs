@@ -594,7 +594,7 @@ impl App {
     pub fn setbg(&mut self, k: Option<&'static str>) {
         match k {
             Some(k) if !bg::exists(k) => {
-                self.toast(format!("{k} not installed"));
+                self.bs.push(B::Sys(format!("{k} is not installed  ·  {}", bg::hint(k))));
                 return;
             }
             Some(k) => self.toast(format!("background  {k}")),

@@ -115,15 +115,15 @@ Type a name on its own and press `enter`, or open the picker with `/background` 
 
 | name | | name | |
 |---|---|---|---|
-| `stars` | built in starfield | `cmatrix` | falling code |
-| `cava` | audio visualizer | `unimatrix` | falling code |
-| `lavat` | lava lamp | `neo-matrix` | falling code |
-| `pipes` | pipes.sh | `tty-clock` | large clock |
-| `asciiquarium` | aquarium | `weathr` | live weather |
-| `cbonsai` | growing bonsai | `rain` | rain and lightning |
+| `stars` | starfield, built in | `matrix` | falling code, built in |
+| `rain` | rain and lightning, built in | `unimatrix` | falling code |
+| `cava` | audio visualizer | `neo-matrix` | falling code |
+| `lavat` | lava lamp | `tty-clock` | large clock |
+| `pipes` | pipes.sh | `weathr` | live weather |
+| `asciiquarium` | aquarium | `cbonsai` | growing bonsai |
 | `globe` | rotating globe | `off` | nothing |
 
-External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background`.
+`stars`, `matrix` and `rain` are part of noname. The others are optional programs you install yourself; noname finds them in `PATH` and common folders like `~/.cargo/bin`, lists only installed ones in the picker and prints the install command for missing ones. External programs run in a hidden pseudo terminal and are drawn at about 12 % brightness, only into empty space. The choice is saved in `~/.config/noname/background`.
 
 <p align="center">
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/start-dark.png"><source media="(prefers-color-scheme: light)" srcset="assets/start-light.png"><img src="assets/start-dark.png" width="420"></picture>
@@ -148,14 +148,14 @@ All Rust dependencies are permissive (MIT, Apache-2.0, Zlib, Unlicense, BSL-1.0,
 
 noname bundles no other programs. Claude Code (proprietary, Anthropic), Codex (Apache-2.0) and the background programs are started as separate processes from your own installation:
 
-| program | license | | program | license |
-|---|---|---|---|---|
-| cava | MIT | | cmatrix | GPL-3.0 |
-| lavat | MIT | | unimatrix | GPL-3.0 |
-| pipes.sh | MIT | | neo-matrix | GPL-3.0 |
-| terminal-rain | MIT | | weathr | GPL-3.0 |
-| tty-clock | BSD | | globe | GPL-3.0 |
-| asciiquarium | GPL-2.0+ | | cbonsai | GPL-3.0 |
+| program | license |
+|---|---|
+| cava, lavat, pipes.sh | MIT |
+| tty-clock | BSD |
+| asciiquarium | GPL-2.0+ |
+| cbonsai, unimatrix, neo-matrix, weathr, globe | GPL-3.0 |
+
+`stars`, `matrix` and `rain` are original code in noname, not ports.
 
 ## Development
 
