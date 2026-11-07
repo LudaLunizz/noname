@@ -30,6 +30,34 @@ pub struct Lv {
 }
 
 static KIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+static TOK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn tsvc() -> String {
+    std::env::var("NONAME_WORK_TOKEN").unwrap_or_else(|_| "ApolloClaw-konto-firma".into())
+}
+
+pub fn work_token() -> Option<String> {
+    let s = tsvc();
+    let o = if cfg!(target_os = "macos") {
+        Command::new("security").args(["find-generic-password", "-s", &s, "-w"]).stderr(Stdio::null()).output().ok()?
+    } else {
+        Command::new("secret-tool").args(["lookup", "service", &s]).stderr(Stdio::null()).output().ok()?
+    };
+    let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    if o.status.success() && !t.is_empty() { Some(t) } else { None }
+}
+
+fn tokenv(c: &mut Command) {
+    c.env_remove("CLAUDE_CONFIG_DIR");
+    match TOK.lock().ok().and_then(|t| t.clone()) {
+        Some(t) => {
+            c.env("CLAUDE_CODE_OAUTH_TOKEN", t);
+        }
+        None => {
+            c.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+        }
+    }
+}
 
 pub fn killall() {
     let ks = KIDS.lock().map(|k| k.clone()).unwrap_or_default();
@@ -130,7 +158,9 @@ fn rd(r: impl io::Read + Send + 'static) -> Receiver<Value> {
 }
 
 fn spawn(args: &[String]) -> io::Result<(Child, ChildStdin, Receiver<Value>)> {
-    let mut c = guard(&mut Command::new("claude"))
+    let mut cm = Command::new("claude");
+    tokenv(&mut cm);
+    let mut c = guard(&mut cm)
         .args([
             "-p",
             "--input-format",
@@ -148,6 +178,7 @@ fn spawn(args: &[String]) -> io::Result<(Child, ChildStdin, Receiver<Value>)> {
         ])
         .args(args)
         .env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1")
+        .env_remove("APOLLOCLAW_SWITCH_DATEI")
         .env("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION", "true")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -298,6 +329,8 @@ impl App {
         a.mname = "…".into();
         a.effs = String::new();
         a.cwd = rel(&std::env::current_dir()?.to_string_lossy());
+        a.wk = work_token().map(|_| ());
+        a.work = TOK.lock().ok().is_some_and(|t| t.is_some());
         a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
         a.br = Command::new("git").args(["branch", "--show-current"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         let (ch, inp, rx) = spawn(&args)?;
@@ -331,6 +364,10 @@ impl App {
         };
         v.push(("background".into(), crate::bg::LIST.into()));
         v.push(("resume".into(), "pick an older session in this folder".into()));
+        if self.wk.is_some() {
+            v.retain(|x| x.0 != "apolloclaw:switch");
+            v.push(("switch".into(), "switch between personal and work account".into()));
+        }
         v
     }
 
@@ -388,6 +425,7 @@ impl App {
                 self.toast(format!("model  {}", self.mname));
             }
             "quit" | "exit" => self.quit = true,
+            "switch" | "apolloclaw:switch" => self.lswitch(),
             "resume" | "continue" if arg.is_empty() => {
                 let v = self.sessions();
                 if v.is_empty() {
@@ -423,6 +461,7 @@ impl App {
         }
         c.arg(format!("Side question, answer briefly in 1-3 sentences without tools: {q}"));
         c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        tokenv(&mut c);
         guard(&mut c);
         let Ok(mut ch) = c.spawn() else {
             self.toast("btw failed");
@@ -505,6 +544,34 @@ impl App {
         }
         v.sort_by(|a, b| b.0.cmp(&a.0));
         v.into_iter().take(50).map(|(_, id, t, m)| (id, t, m)).collect()
+    }
+
+    pub(crate) fn lswitch(&mut self) {
+        let to_work = !self.work;
+        let tok = if to_work {
+            match work_token() {
+                Some(t) => Some(t),
+                None => {
+                    self.bs.push(B::Sys(format!("no work token in the keyring ({})", tsvc())));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        if let Ok(mut t) = TOK.lock() {
+            *t = tok;
+        }
+        let sid = self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default();
+        if sid.is_empty() {
+            self.work = to_work;
+            self.lcmd("clear");
+            self.work = to_work;
+        } else {
+            self.lresume(&sid);
+            self.work = to_work;
+        }
+        self.toast(if to_work { "account  work" } else { "account  personal" });
     }
 
     pub(crate) fn lresume(&mut self, id: &str) {

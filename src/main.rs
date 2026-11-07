@@ -536,7 +536,8 @@ impl V for V1 {
         let hdr = lr(
             vec![Span::styled(a.cwd.clone(), st(MU)), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA))],
             {
-                let mut r = decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI), &GD);
+                let mut r = if a.work { vec![Span::styled("work  ", st(PK).bold())] } else { vec![] };
+                r.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI), &GD));
                 r.push(Span::styled(if a.effs.is_empty() { String::new() } else { format!("  {}", a.effs) }, st(FA)));
                 r
             },

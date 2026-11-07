@@ -108,6 +108,7 @@ Every Claude Code command and skill is available. noname adds or replaces these:
 | `/model` | cycle models |
 | `/background` | open the background picker |
 | `/clear` | start a fresh session |
+| `/switch` | swap between personal and work account, same session (needs a work token from `claude setup-token` in the keyring under `NONAME_WORK_TOKEN`) |
 
 ## Backgrounds
 
