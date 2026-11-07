@@ -9,6 +9,7 @@ repo="https://github.com/Silvertree2010/noname"
 
 rm -rf "$out"
 mkdir -p "$out"
+out="$(cd "$out" && pwd)"
 cp -r "$here/aur" "$here/homebrew" "$here/scoop" "$out/"
 
 src="SKIP"
@@ -22,7 +23,7 @@ while read -r hash file; do
   t="${t%.tar.gz}"
   t="${t%.zip}"
   args+=(-e "s|@SHA_$t@|$hash|g")
-done < <(grep -E 'noname-.*\.(tar\.gz|zip)$' "$sums")
+done < <(tr -d '\r' < "$sums" | grep -E 'noname-.*\.(tar\.gz|zip)$')
 
 find "$out" -type f -exec sed -i "${args[@]}" {} +
 
