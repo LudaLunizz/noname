@@ -168,7 +168,7 @@ impl Bg {
         }
         let (mut m, mut s) = (0, 0);
         let w = ws(rows, cols);
-        if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null(), &w) } != 0 {
+        if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) } != 0 {
             return Err(io::Error::last_os_error());
         }
         let m = unsafe { OwnedFd::from_raw_fd(m) };
@@ -185,7 +185,8 @@ impl Bg {
         unsafe {
             c.pre_exec(|| {
                 libc::setsid();
-                libc::ioctl(0, libc::TIOCSCTTY, 0);
+                libc::ioctl(0, libc::TIOCSCTTY as _, 0);
+                #[cfg(target_os = "linux")]
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
                 Ok(())
             });
@@ -218,7 +219,7 @@ impl Bg {
         p.sz = (r, c);
         let w = ws(r, c);
         unsafe {
-            libc::ioctl(p.m.as_raw_fd(), libc::TIOCSWINSZ, &w);
+            libc::ioctl(p.m.as_raw_fd(), libc::TIOCSWINSZ as _, &w);
         }
         if let Ok(mut x) = p.ps.lock() {
             x.set_size(r, c);

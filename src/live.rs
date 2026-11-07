@@ -122,7 +122,8 @@ fn reap(c: &mut Child) {
 fn guard(c: &mut Command) -> &mut Command {
     unsafe {
         c.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            #[cfg(target_os = "linux")]
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
             Ok(())
         });
     }
