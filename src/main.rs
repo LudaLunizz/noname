@@ -717,8 +717,16 @@ impl V for V1 {
         let bh = h.saturating_sub(top + bot + eh + 1);
         let col = |y: u16, hh: u16| Rect { x: x0, y, width: w as u16, height: hh };
 
+        let mut hl = if title() {
+            let mut v = decode("noname", a.t / 2, a.t, 43, st(LI()).bold(), &gd());
+            v.push(pad(3));
+            v
+        } else {
+            vec![]
+        };
+        hl.extend([Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))]);
         let hdr = lr(
-            vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))],
+            hl,
             {
                 let mut r = if a.work { vec![Span::styled("work  ", st(PK()).bold())] } else { vec![] };
                 r.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI()), &gd()));
@@ -841,17 +849,26 @@ impl V for V1 {
         let (c1, c2) = bar(db[0], 10, "▰", "▱");
         let (h1, h2) = bar(db[1], 10, "▰", "▱");
         let (d1, d2) = bar(db[2], 10, "▰", "▱");
-        let l = vec![
-            Span::styled("context ", st(FA())), Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG())),
-            pad(3), Span::styled("5h ", st(FA())), Span::styled(h1, st(CY())), Span::styled(h2, st(FA())), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG())),
-            pad(3), Span::styled("week ", st(FA())), Span::styled(d1, st(CY())), Span::styled(d2, st(FA())), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG())),
+        let segs = [
+            vec![Span::styled("context ", st(FA())), Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG()))],
+            vec![Span::styled("5h ", st(FA())), Span::styled(h1, st(CY())), Span::styled(h2, st(FA())), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG()))],
+            vec![Span::styled("week ", st(FA())), Span::styled(d1, st(CY())), Span::styled(d2, st(FA())), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG()))],
         ];
+        let vis = bars();
+        let shown: Vec<Vec<Span<'static>>> = segs.into_iter().enumerate().filter(|(j, _)| vis[*j]).map(|(_, x)| x).collect();
+        let mut l: Vec<Span<'static>> = vec![];
+        for (j, sg) in shown.iter().enumerate() {
+            if j > 0 {
+                l.push(pad(3));
+            }
+            l.extend(sg.clone());
+        }
         let r = match &a.toast {
             Some((t, e)) if !t.starts_with("mode") => decode(t, a.t + 60 - e, a.t, 13, st(L2()), &gd()),
             _ => vec![],
         };
         let full = sw(&l) + sw(&r) + 2 <= w;
-        let line = if full { lr(l, r, w) } else { lr(l[..4].to_vec(), r, w) };
+        let line = if full { lr(l, r, w) } else { lr(shown.first().cloned().unwrap_or_default(), r, w) };
         f.render_widget(Paragraph::new(line), col(iy + ih as u16 + bwh + 1, 1));
         if self.bg.as_ref().map(|b| b.name) != a.bgw {
             let ar = f.area();

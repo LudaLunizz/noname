@@ -815,6 +815,10 @@ impl App {
             ("theme", pal::THEMES[pal::cur()].name.into()),
             ("default permission", MODES[defmode().unwrap_or(0)].into()),
             ("background", self.bgw.unwrap_or("off").into()),
+            ("context bar", if bars()[0] { "on" } else { "off" }.into()),
+            ("5h bar", if bars()[1] { "on" } else { "off" }.into()),
+            ("week bar", if bars()[2] { "on" } else { "off" }.into()),
+            ("title", if title() { "on" } else { "off" }.into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -1178,6 +1182,17 @@ impl App {
                     3 => {
                         self.ns = None;
                         self.cmd("background");
+                    }
+                    4..=6 => {
+                        let j = sel - 4;
+                        let on = !bars()[j];
+                        setbar(j, on);
+                        self.toast(format!("{}  {}", BARS[j], if on { "on" } else { "off" }));
+                    }
+                    7 => {
+                        let on = !title();
+                        settitle(on);
+                        self.toast(format!("title  {}", if on { "on" } else { "off" }));
                     }
                     _ => self.upcheck(true),
                 },
@@ -1889,6 +1904,54 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
 
 fn cur_label(q: &Option<Qa>, j: usize) -> String {
     q.as_ref().map(|q| q.qs[q.i].opts[j].0.clone()).unwrap_or_default()
+}
+
+pub const BARS: [&str; 3] = ["context bar", "5h bar", "week bar"];
+const BKEY: [&str; 3] = ["context", "5h", "week"];
+static BSET: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+pub fn bars() -> [bool; 3] {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut m = BSET.load(Relaxed);
+    if m == u8::MAX {
+        let hid = std::fs::read_to_string(sys::cfgfile("bars")).unwrap_or_default();
+        m = (0..3).filter(|&i| !hid.split([',', '\n', ' ']).any(|x| x.trim() == BKEY[i])).fold(0, |a, i| a | 1 << i);
+        BSET.store(m, Relaxed);
+    }
+    [m & 1 != 0, m & 2 != 0, m & 4 != 0]
+}
+
+pub fn setbar(i: usize, on: bool) {
+    let mut b = bars();
+    b[i] = on;
+    BSET.store((0..3).filter(|&j| b[j]).fold(0, |a, j| a | 1 << j), std::sync::atomic::Ordering::Relaxed);
+    let hid: Vec<&str> = (0..3).filter(|&j| !b[j]).map(|j| BKEY[j]).collect();
+    let f = sys::cfgfile("bars");
+    if let Some(d) = std::path::Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, hid.join(","));
+}
+
+static TSET: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+pub fn title() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut m = TSET.load(Relaxed);
+    if m == u8::MAX {
+        m = (std::fs::read_to_string(sys::cfgfile("title")).unwrap_or_default().trim() == "on") as u8;
+        TSET.store(m, Relaxed);
+    }
+    m == 1
+}
+
+pub fn settitle(on: bool) {
+    TSET.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+    let f = sys::cfgfile("title");
+    if let Some(d) = std::path::Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, if on { "on" } else { "off" });
 }
 
 pub fn modefile() -> String {
