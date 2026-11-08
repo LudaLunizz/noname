@@ -195,6 +195,36 @@ mod win {
     };
 }
 
+pub fn open(path: &str, line: &str) {
+    let mut c = if let Ok(t) = std::env::var("NONAME_OPEN") {
+        let t = t.replace("{line}", if line.is_empty() { "1" } else { line });
+        let t = if t.contains("{}") { t.replace("{}", path) } else { format!("{t} {path}") };
+        let mut v = t.split_whitespace().map(str::to_string);
+        let mut c = Command::new(v.next().unwrap_or_default());
+        c.args(v);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(path);
+        c
+    } else if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/c", "start", "", path]);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
+    let _ = c.spawn();
+}
+
 pub fn month() -> i32 {
     #[cfg(unix)]
     unsafe {

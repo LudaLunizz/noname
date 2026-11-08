@@ -61,7 +61,11 @@ Other flags go straight to `claude`.
 | `ctrl+o` | details | `/btw` | side question |
 | `→` | accept suggestion | `/model` | cycle models |
 | `ctrl+v` | paste image | | |
-| `ctrl+backspace` | delete word | | |
+| `ctrl+backspace` | delete word | `/tasks` | background tasks |
+| `ctrl+g` | edit in $EDITOR | `/mcp` | mcp servers |
+| `ctrl+b` | move to background | `/diff` | workspace diff |
+| `@` | mention a file | `/effort` | effort level |
+| `↓` | tasks | `/rename` | name the session |
 
 Every Claude Code command and skill works as usual.
 

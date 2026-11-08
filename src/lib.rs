@@ -93,6 +93,7 @@ pub mod pal {
 
 pub const MODELS: [&str; 4] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1"];
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub const MID_ALL: [(&str, &str); 4] = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1")];
 pub const MODES: [&str; 4] = ["default", "plan", "auto", "bypass"];
 pub const CMDS: [(&str, &str); 9] = [
     ("btw", "side question, main chat keeps going"),
@@ -179,6 +180,7 @@ pub struct Qa {
     pub sel: usize,
     pub pick: Vec<bool>,
     pub ans: Vec<(String, String)>,
+    pub plan: bool,
 }
 
 pub enum B {
@@ -276,7 +278,50 @@ pub struct App {
     pub upf: bool,
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
+    pub tasks: Vec<Task>,
+    pub tk: Option<(usize, bool)>,
+    tkp: u64,
+    pub pk: Option<Pk>,
+    pub fsug: Vec<String>,
+    pub fq: Option<String>,
+    fqt: u64,
+    pub fhide: Option<String>,
+    pub edit: bool,
+    pub retry: Option<(String, u64)>,
+    pub hooks: Vec<(String, String, u64)>,
+    pub stitle: String,
+    pub models: Vec<(String, String, String, Vec<String>)>,
+    pub links: std::cell::RefCell<Vec<(u16, u16, u16, String)>>,
+    pub diff: Option<serde_json::Value>,
 }
+
+#[derive(Clone, Default)]
+pub struct Pk {
+    pub kind: u8,
+    pub title: String,
+    pub items: Vec<(String, String, String)>,
+    pub sel: usize,
+    pub off: usize,
+    pub lines: Vec<(char, String)>,
+}
+
+#[derive(Clone, Default)]
+pub struct Task {
+    pub id: String,
+    pub kind: u8,
+    pub desc: String,
+    pub st: u8,
+    pub t0: u64,
+    pub t1: u64,
+    pub tool: String,
+    pub last: String,
+    pub tools: u64,
+    pub toks: u64,
+    pub out: String,
+    pub acts: Vec<String>,
+}
+
+pub const TKIND: [(&str, &str, &str); 4] = [("$", "shell", "shells"), ("~", "monitor", "monitors"), ("&", "agent", "agents"), ("%", "workflow", "workflows")];
 
 fn tl(k: Tk, a: &str, sum: &str, body: Vec<Ln>) -> Tool {
     Tool { k, nm: k.nm().into(), a: a.into(), sum: sum.into(), body, st: St::Ok, t0: 0, t1: 0 }
@@ -464,6 +509,21 @@ impl App {
             upf: false,
             le: 0,
             imgs: vec![],
+            tasks: vec![],
+            tk: None,
+            tkp: 0,
+            pk: None,
+            fsug: vec![],
+            fq: None,
+            fqt: 0,
+            fhide: None,
+            edit: false,
+            retry: None,
+            hooks: vec![],
+            stitle: String::new(),
+            models: MID_ALL.iter().map(|(v, d)| (v.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect())).collect(),
+            links: std::cell::RefCell::new(vec![]),
+            diff: None,
             tf: false,
         }
     }
@@ -492,6 +552,13 @@ impl App {
 
     pub fn step(&mut self) {
         self.t += 1;
+        self.fpoll();
+        if let Some((s, true)) = self.tk {
+            if self.t >= self.tkp + 30 {
+                self.tkp = self.t;
+                self.tpoll(s);
+            }
+        }
         if let Some(r) = &self.upr {
             if let Ok(u) = r.try_recv() {
                 self.upr = None;
@@ -858,6 +925,18 @@ impl App {
             self.ns = Some(0);
             return;
         }
+        if (c0 == "model" || c0 == "effort") && a0.trim().is_empty() && !self.is_codex() && self.lv.is_none() {
+            if c0 == "model" { self.modelpicker() } else { self.effortpicker() }
+            return;
+        }
+        if c0 == "tasks" || c0 == "bashes" {
+            if self.tasks.is_empty() {
+                self.toast("no tasks");
+            } else {
+                self.tk = Some((self.tasks.len() - 1, false));
+            }
+            return;
+        }
         if c0 == "default-permission" {
             let a0 = a0.trim();
             if a0.is_empty() {
@@ -1022,6 +1101,149 @@ impl App {
         }
     }
 
+    pub fn attok(&self) -> Option<(usize, String)> {
+        let cs: Vec<char> = self.inp.chars().collect();
+        let mut j = self.cur.min(cs.len());
+        while j > 0 && !cs[j - 1].is_whitespace() {
+            j -= 1;
+        }
+        if cs.get(j) != Some(&'@') {
+            return None;
+        }
+        let end = (j..cs.len()).find(|&i| cs[i].is_whitespace()).unwrap_or(cs.len());
+        if end != self.cur {
+            return None;
+        }
+        Some((j, cs[j + 1..end].iter().collect()))
+    }
+
+    fn fpoll(&mut self) {
+        let q = self.attok().map(|x| x.1);
+        if q.is_none() {
+            if self.fq.is_some() {
+                self.fq = None;
+                self.fsug.clear();
+            }
+            self.fhide = None;
+            return;
+        }
+        if q == self.fq || self.t < self.fqt + 2 {
+            return;
+        }
+        self.fqt = self.t;
+        let q = q.unwrap();
+        self.fq = Some(q.clone());
+        if !self.fsuggest(&q) {
+            self.fsug = localfiles(&q);
+            self.ms = 0;
+        }
+    }
+
+    pub fn atmenu(&self) -> Vec<String> {
+        match self.attok() {
+            Some((_, q)) if self.fhide.as_deref() != Some(q.as_str()) => self.fsug.clone(),
+            _ => vec![],
+        }
+    }
+
+    pub fn atpick(&mut self, p: &str) {
+        let Some((j, _)) = self.attok() else { return };
+        let cs: Vec<char> = self.inp.chars().collect();
+        let dir = p.ends_with('/') || p.ends_with('\\');
+        let ins = format!("@{}{}", if p.contains(' ') { format!("\"{p}\"") } else { p.to_string() }, if dir { "" } else { " " });
+        let n = ins.chars().count();
+        self.inp = cs[..j].iter().collect::<String>() + &ins + &cs[self.cur..].iter().collect::<String>();
+        self.cur = j + n;
+        self.ms = 0;
+        self.fq = None;
+    }
+
+    pub fn click(&mut self, x: u16, y: u16) {
+        let hit = self.links.borrow().iter().find(|l| l.0 == y && x >= l.1 && x < l.2).map(|l| l.3.clone());
+        if let Some(p) = hit {
+            let (path, line) = match p.rsplit_once(':') {
+                Some((a, b)) if b.chars().all(|c| c.is_ascii_digit()) && !b.is_empty() => (a.to_string(), b.to_string()),
+                _ => (p.clone(), String::new()),
+            };
+            let abs = if std::path::Path::new(&path).is_absolute() { path.clone() } else { format!("{}/{path}", std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default()) };
+            sys::open(&abs, &line);
+            self.toast(format!("open  {}", path.rsplit('/').next().unwrap_or(&path)));
+        }
+    }
+
+    fn pkkey(&mut self, k: KeyEvent) {
+        let Some(p) = &mut self.pk else { return };
+        let n = p.items.len();
+        if p.kind == 4 {
+            let h = p.lines.len();
+            match k.code {
+                KeyCode::Esc | KeyCode::Left => {
+                    p.kind = 3;
+                    p.lines.clear();
+                    p.off = 0;
+                }
+                KeyCode::Up => p.off = p.off.saturating_sub(1),
+                KeyCode::Down => p.off = (p.off + 1).min(h.saturating_sub(1)),
+                KeyCode::PageUp => p.off = p.off.saturating_sub(10),
+                KeyCode::PageDown | KeyCode::Char(' ') => p.off = (p.off + 10).min(h.saturating_sub(1)),
+                _ => {}
+            }
+            return;
+        }
+        match k.code {
+            KeyCode::Esc => self.pk = None,
+            KeyCode::Up => p.sel = p.sel.saturating_sub(1),
+            KeyCode::Down => p.sel = (p.sel + 1).min(n.saturating_sub(1)),
+            KeyCode::Enter | KeyCode::Right if n > 0 => {
+                let (kind, key) = (p.kind, p.items[p.sel].2.clone());
+                self.pkpick(kind, key, false);
+            }
+            KeyCode::Char(' ') | KeyCode::Char('d') if n > 0 && p.kind == 2 => {
+                let key = p.items[p.sel].2.clone();
+                self.pkpick(2, key, true);
+            }
+            _ => {}
+        }
+    }
+
+    fn pkpick(&mut self, kind: u8, key: String, alt: bool) {
+        match kind {
+            0 => {
+                self.pk = None;
+                self.setmodel(&key);
+            }
+            1 => {
+                self.pk = None;
+                self.seteffort(&key);
+            }
+            2 => self.mcpact(&key, alt),
+            3 => {
+                let lines = difflines(self.diff.as_ref(), &key);
+                if let Some(p) = &mut self.pk {
+                    p.kind = 4;
+                    p.lines = lines;
+                    p.off = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn modelpicker(&mut self) {
+        let cur = MID_ALL.get(self.model).map(|x| x.0).unwrap_or("");
+        let items: Vec<(String, String, String)> = self.models.iter().map(|(v, d, ds, _)| (d.clone(), one_line(ds, 60), v.clone())).collect();
+        let sel = self.models.iter().position(|m| m.0 == cur || m.0.starts_with(cur) || cur.starts_with(&m.0)).unwrap_or(0);
+        self.pk = Some(Pk { kind: 0, title: "model".into(), items, sel, ..Default::default() });
+    }
+
+    pub fn effortpicker(&mut self) {
+        let cur = MID_ALL.get(self.model).map(|x| x.0).unwrap_or("");
+        let lv: Vec<String> = self.models.iter().find(|m| m.0 == cur).map(|m| m.3.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| EFF.iter().map(|x| x.to_string()).collect());
+        let sel = lv.iter().position(|x| *x == self.effs).unwrap_or(0);
+        let items = lv.iter().map(|x| (x.clone(), String::new(), x.clone())).collect();
+        self.pk = Some(Pk { kind: 1, title: "effort".into(), items, sel, ..Default::default() });
+    }
+
     pub fn attach(&mut self, b: Vec<u8>) -> bool {
         match img::shrink(b) {
             Ok((b, m)) => {
@@ -1157,6 +1379,40 @@ impl App {
             return;
         }
         if self.qa.is_some() && !(ct && k.code == KeyCode::Char('c')) && self.qkey(k) {
+            return;
+        }
+        if self.pk.is_some() && !(ct && k.code == KeyCode::Char('c')) {
+            self.pkkey(k);
+            return;
+        }
+        if let Some((sel, det)) = self.tk {
+            if ct && k.code == KeyCode::Char('c') {
+                self.quit = true;
+                return;
+            }
+            let n = self.tasks.len();
+            if n == 0 {
+                self.tk = None;
+                return;
+            }
+            let sel = sel.min(n - 1);
+            match k.code {
+                KeyCode::Esc | KeyCode::Left if det => self.tk = Some((sel, false)),
+                KeyCode::Esc => self.tk = None,
+                KeyCode::Up if !det => self.tk = Some((sel.saturating_sub(1), false)),
+                KeyCode::Down if !det => self.tk = Some(((sel + 1).min(n - 1), false)),
+                KeyCode::Enter | KeyCode::Right if !det => {
+                    self.tk = Some((sel, true));
+                    self.tkp = self.t;
+                    self.tpoll(sel);
+                }
+                KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
+                    if self.tasks[sel].st == 0 {
+                        self.tstop(sel);
+                    }
+                }
+                _ => {}
+            }
             return;
         }
         if let Some(sel) = self.ns {
@@ -1347,6 +1603,9 @@ impl App {
                 self.cur = 0
             }
             KeyCode::Char('v') if ct => self.clipv(),
+            KeyCode::Char('g') if ct => self.edit = true,
+            KeyCode::Char('b') if ct => self.tbg(),
+            KeyCode::Down if self.inp.is_empty() && self.hi.is_none() && !self.tasks.is_empty() => self.tk = Some((self.tasks.len() - 1, false)),
             KeyCode::Backspace if k.modifiers.intersects(Km::CONTROL | Km::ALT) => {
                 let j = self.wl();
                 self.cut(j, self.cur)
@@ -1446,6 +1705,77 @@ impl App {
     pub fn tools(&self) -> Vec<usize> {
         self.bs.iter().enumerate().filter(|(_, b)| matches!(b, B::Tl(_))).map(|(i, _)| i).collect()
     }
+}
+
+fn one_line(s: &str, n: usize) -> String {
+    let l = s.lines().next().unwrap_or("").trim();
+    if l.chars().count() > n { l.chars().take(n - 1).collect::<String>() + "…" } else { l.to_string() }
+}
+
+pub fn localfiles(q: &str) -> Vec<String> {
+    let root = std::env::current_dir().unwrap_or_default();
+    let mut all = vec![];
+    let mut st = vec![root.clone()];
+    while let Some(d) = st.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with('.') || matches!(n.as_str(), "target" | "node_modules" | "dist" | "build" | "__pycache__") {
+                continue;
+            }
+            let rel = p.strip_prefix(&root).map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+            if p.is_dir() {
+                all.push(format!("{rel}/"));
+                if all.len() < 20000 {
+                    st.push(p);
+                }
+            } else {
+                all.push(rel);
+            }
+        }
+        if all.len() > 20000 {
+            break;
+        }
+    }
+    let ql = q.to_lowercase();
+    let mut hits: Vec<(i64, String)> = all
+        .into_iter()
+        .filter_map(|p| {
+            let pl = p.to_lowercase();
+            let mut it = pl.chars();
+            if !ql.chars().all(|c| it.any(|x| x == c)) {
+                return None;
+            }
+            let base = pl.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+            let sc = if base.starts_with(&ql) { 0 } else if pl.contains(&ql) { 1000 } else { 3000 } + p.len() as i64;
+            Some((sc, p))
+        })
+        .collect();
+    hits.sort();
+    hits.into_iter().take(12).map(|x| x.1).collect()
+}
+
+pub fn difflines(d: Option<&serde_json::Value>, path: &str) -> Vec<(char, String)> {
+    let mut o = vec![];
+    let Some(d) = d else { return o };
+    for f in d["hunks"].as_array().cloned().unwrap_or_default() {
+        if f["path"].as_str() != Some(path) {
+            continue;
+        }
+        for h in f["hunks"].as_array().cloned().unwrap_or_default() {
+            o.push(('@', format!("@@ -{},{} +{},{} @@", h["oldStart"], h["oldLines"], h["newStart"], h["newLines"])));
+            for l in h["lines"].as_array().cloned().unwrap_or_default() {
+                let l = l.as_str().unwrap_or("").to_string();
+                let c = l.chars().next().unwrap_or(' ');
+                o.push((c, l.chars().skip(1).collect()));
+            }
+        }
+    }
+    if o.is_empty() {
+        o.push((' ', "no diff text".into()));
+    }
+    o
 }
 
 fn tokend(cs: &[char]) -> Option<usize> {
@@ -1881,6 +2211,14 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             let _ = execute!(io::stdout(), ratatui::crossterm::terminal::SetTitle(&tt));
             lt = tt;
         }
+        if a.edit {
+            a.edit = false;
+            if let Some(t) = editor(&a.inp) {
+                a.inp = t.trim_end_matches('\n').to_string();
+                a.cur = a.inp.chars().count();
+            }
+            term.clear()?;
+        }
         let dl = Instant::now() + Duration::from_millis(33);
         while event::poll(dl.saturating_duration_since(Instant::now()))? {
             match event::read()? {
@@ -1891,6 +2229,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 }
                 Event::Paste(s) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => a.paste(s),
                 Event::Mouse(m) => match m.kind {
+                    MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left) => a.click(m.column, m.row),
                     MouseEventKind::ScrollUp => a.scr = (a.scr + 3).min(a.smax.get()),
                     MouseEventKind::ScrollDown => a.scr = a.scr.saturating_sub(3),
                     _ => {}
@@ -2002,9 +2341,26 @@ pub fn bgfile() -> String {
 }
 
 fn ttl(a: &App) -> String {
-    let d = a.cwd.rsplit('/').next().unwrap_or("").to_string();
+    let d = if a.stitle.is_empty() { a.cwd.rsplit('/').next().unwrap_or("").to_string() } else { a.stitle.clone() };
     let st = if a.ask.is_some() || a.qa.is_some() { " · waiting" } else if a.busy { " · working" } else { "" };
     format!("noname · {d}{st}")
+}
+
+fn editor(s: &str) -> Option<String> {
+    let f = std::env::temp_dir().join(format!("noname-prompt-{}.md", std::process::id()));
+    std::fs::write(&f, s).ok()?;
+    let ed = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_else(|_| if cfg!(windows) { "notepad".into() } else if sys::which("nano").is_some() { "nano".into() } else { "vi".into() });
+    let _ = restore();
+    let mut v = ed.split_whitespace();
+    let ok = std::process::Command::new(v.next().unwrap_or("vi")).args(v).arg(&f).status().is_ok_and(|x| x.success());
+    let _ = enable_raw_mode();
+    let mut out = io::stdout();
+    let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
+    let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
+    let r = if ok { std::fs::read_to_string(&f).ok() } else { None };
+    let _ = std::fs::remove_file(&f);
+    r
 }
 
 fn restore() -> io::Result<()> {

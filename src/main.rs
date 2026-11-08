@@ -241,7 +241,18 @@ fn gline(a: &App, ix: &[usize], w: usize) -> Vec<Line<'static>> {
     v
 }
 
+thread_local! {
+    static LK: std::cell::RefCell<Vec<(usize, u16, u16, String)>> = const { std::cell::RefCell::new(vec![]) };
+}
+
+fn link(i: usize, x: usize, len: usize, t: &str) {
+    if !t.is_empty() && len > 0 {
+        LK.with(|l| l.borrow_mut().push((i, x as u16, (x + len) as u16, t.to_string())));
+    }
+}
+
 fn body(a: &App, w: usize) -> Vec<Line<'static>> {
+    LK.with(|l| l.borrow_mut().clear());
     let m = mdt();
     let mut v: Vec<Line<'static>> = vec![];
     let mut pk = 0u8;
@@ -349,6 +360,9 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                     decode(&t.sum, ef, a.t, sd, st(FA()), &gd())
                 };
                 let line = lr(l, r, w);
+                if matches!(t.k, Tk::Read | Tk::Edit) && !t.a.is_empty() {
+                    link(v.len(), 11, unicode_width::UnicodeWidthStr::width(t.a.as_str()).min(w.saturating_sub(12)), &t.a);
+                }
                 if t.st == St::Err {
                     let el = a.t.saturating_sub(t.t1);
                     let mut sp: Vec<Span<'static>> = line.spans.into_iter().map(|x| if x.style.fg == Some(FG()) || x.style.fg == Some(MU()) { Span::styled(x.content, st(RD())) } else { x }).collect();
@@ -356,6 +370,17 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                     v.push(Line::from(sp));
                 } else {
                     v.push(line);
+                }
+                if t.k == Tk::Task && t.st == St::Run && !a.open {
+                    for l in t.body.iter().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+                        if let Ln::P(x) = l {
+                            let mut x = x.clone();
+                            if x.chars().count() > w.saturating_sub(10) {
+                                x = x.chars().take(w.saturating_sub(11)).collect::<String>() + "~";
+                            }
+                            v.push(Line::from(vec![pad(4), Span::styled("| ", st(FA())), Span::styled(x, st(FA()))]));
+                        }
+                    }
                 }
                 let show = t.st != St::Run && (t.k == Tk::Edit || t.st == St::Err || a.open);
                 let auto = t.k == Tk::Edit || t.st == St::Err;
@@ -376,6 +401,16 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                         let mut s = s;
                         if s.chars().count() > w.saturating_sub(14) {
                             s = s.chars().take(w.saturating_sub(15)).collect::<String>() + "~";
+                        }
+                        if t.k == Tk::Grep {
+                            if let Ln::P(x) = ln {
+                                let tok = x.split_whitespace().next().unwrap_or("");
+                                let fp = tok.split(':').next().unwrap_or("");
+                                if !fp.is_empty() && std::path::Path::new(fp).is_file() {
+                                    let tg = tok.trim_end_matches(':').split(':').take(2).collect::<Vec<_>>().join(":");
+                                    link(v.len(), 12, tok.chars().count(), &tg);
+                                }
+                            }
                         }
                         let mut sp = vec![pad(4), Span::styled("| ", st(FA())), Span::styled(format!("{n:>3} "), st(FA()))];
                         match ln {
@@ -461,7 +496,14 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
         v.push(Line::default());
         let mut sp = vec![pad(2)];
         sp.extend(noise(8, a.t, 99, &gd()));
-        sp.push(Span::styled(format!("  thinking  {:.1}s", a.turn_secs()), st(FA())));
+        match &a.retry {
+            Some((m, until)) => {
+                let s = until.saturating_sub(a.t) as f32 / 30.0;
+                sp.push(Span::styled(format!("  retrying{}  ", if s >= 0.5 { format!(" in {s:.0}s") } else { String::new() }), st(PE())));
+                sp.push(Span::styled(m.clone(), st(FA())));
+            }
+            None => sp.push(Span::styled(format!("  thinking  {:.1}s", a.turn_secs()), st(FA()))),
+        }
         v.push(Line::from(sp));
     }
     v
@@ -469,6 +511,29 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
 
 impl V for V1 {
     fn key(&mut self, k: &Ke, a: &mut App) -> bool {
+        let am = a.atmenu();
+        if !am.is_empty() && a.rw.is_none() && a.pk.is_none() && a.tk.is_none() {
+            let sel = a.ms.min(am.len() - 1);
+            match k.code {
+                K::Up => {
+                    a.ms = sel.saturating_sub(1);
+                    return true;
+                }
+                K::Down => {
+                    a.ms = (sel + 1).min(am.len() - 1);
+                    return true;
+                }
+                K::Tab | K::Right | K::Enter if k.modifiers.is_empty() => {
+                    a.atpick(&am[sel]);
+                    return true;
+                }
+                K::Esc => {
+                    a.fhide = a.attok().map(|x| x.1);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         let m = menu(a);
         if !m.is_empty() && a.rw.is_none() && a.rs.is_none() {
             let sel = a.ms.min(m.len() - 1);
@@ -528,6 +593,17 @@ impl V for V1 {
             }
             _ => {}
         }
+        if s == "tasks" || s == "taskd" {
+            let mk = |kind: u8, desc: &str, st: u8, t0: u64, t1: u64, tools: u64, toks: u64, out: &str, acts: &[&str]| Task { id: desc.into(), kind, desc: desc.into(), st, t0, t1, tool: String::new(), last: acts.last().map(|x| x.to_string()).unwrap_or_default(), tools, toks, out: out.into(), acts: acts.iter().map(|x| x.to_string()).collect() };
+            a.tasks = vec![
+                mk(0, "cargo watch -x test", 0, 1, 0, 0, 0, "running 14 tests\ntest feed::tick ... ok\ntest swipe::snap ... ok\ntest result: ok. 14 passed", &[]),
+                mk(1, "tail -f logs/app.log | grep ERROR", 0, 1, 0, 0, 0, "", &[]),
+                mk(2, "explore: where is the feed rendered", 0, 1, 0, 14, 32100, "", &["grep render  src", "read src/feed.rs", "read src/ui/mod.rs"]),
+                mk(3, "review-changes", 1, 1, 400, 0, 0, "", &[]),
+            ];
+            a.t = a.t.max(900);
+            a.tk = Some((if s == "taskd" { 0 } else { 2 }, s == "taskd"));
+        }
         if s == "slash" {
             a.inp = "/co".into();
             a.cur = 3;
@@ -585,6 +661,25 @@ impl V for V1 {
                         extra.push(Line::from(sp));
                     }
                 }
+            }
+            extra.push(Line::default());
+        }
+        let am = a.atmenu();
+        if !am.is_empty() && a.rw.is_none() {
+            let sel = a.ms.min(am.len() - 1);
+            let lo = sel.saturating_sub(5).min(am.len().saturating_sub(6));
+            for (j, pth) in am.iter().enumerate().skip(lo).take(6) {
+                let on = j == sel;
+                let (d, b) = match pth.trim_end_matches('/').rsplit_once('/') {
+                    Some((d, b)) => (format!("{d}/"), format!("{b}{}", if pth.ends_with('/') { "/" } else { "" })),
+                    None => (String::new(), pth.clone()),
+                };
+                extra.push(Line::from(vec![
+                    Span::styled(if on { "› " } else { "  " }, st(LI()).bold()),
+                    Span::styled("@", st(FA())),
+                    Span::styled(d, st(if on { MU() } else { FA() })),
+                    Span::styled(b, if on { st(WH()).bold() } else { st(L2()) }),
+                ]));
             }
             extra.push(Line::default());
         }
@@ -651,6 +746,130 @@ impl V for V1 {
                     Span::styled(format!("{k:<cw$}"), if on { st(WH()).bold() } else { st(MU()) }),
                     Span::styled(v.clone(), st(if on { L2() } else { FA() })),
                 ]));
+            }
+            extra.push(Line::default());
+        }
+        if let Some(p) = &a.pk {
+            if p.kind == 4 {
+                let sel = p.items.get(p.sel).map(|x| x.2.clone()).unwrap_or_default();
+                extra.push(lr(vec![Span::styled("diff  ", st(L2()).bold()), Span::styled(sel, st(WH()).bold())], vec![Span::styled(format!("{}/{}", (p.off + 1).min(p.lines.len()), p.lines.len()), st(FA()))], w));
+                let hh = (ar.height as usize / 2).clamp(6, 30);
+                for (c, l) in p.lines.iter().skip(p.off).take(hh) {
+                    let col = match c {
+                        '+' => GR(),
+                        '-' => RD(),
+                        '@' => CY(),
+                        _ => MU(),
+                    };
+                    let mut l = l.clone();
+                    if l.chars().count() > w.saturating_sub(4) {
+                        l = l.chars().take(w.saturating_sub(5)).collect::<String>() + "~";
+                    }
+                    if *c == '@' {
+                        extra.push(Line::from(Span::styled(l, st(col))));
+                    } else {
+                        extra.push(Line::from(vec![Span::styled(format!("{c} "), st(col)), Span::styled(l, st(col))]));
+                    }
+                }
+            } else {
+                extra.push(Line::from(Span::styled(p.title.clone(), st(L2()).bold())));
+                if p.items.is_empty() {
+                    extra.push(Line::from(vec![pad(2)].into_iter().chain(noise(6, a.t, 610, &gd())).collect::<Vec<_>>()));
+                }
+                let n = p.items.len();
+                let lo = p.sel.saturating_sub(9).min(n.saturating_sub(10));
+                let cw = p.items.iter().map(|x| x.0.chars().count()).max().unwrap_or(0).min(48) + 3;
+                for (j, (l, rt, _)) in p.items.iter().enumerate().skip(lo).take(10) {
+                    let on = j == p.sel;
+                    let l: String = l.chars().take(48).collect();
+                    let rc = if rt.contains("failed") || rt.contains("needs-auth") { RD() } else if rt.contains("connected") { GR() } else if rt.starts_with('+') { GR() } else { FA() };
+                    extra.push(Line::from(vec![
+                        Span::styled(if on { "› " } else { "  " }, st(LI()).bold()),
+                        Span::styled(format!("{l:<cw$}"), if on { st(WH()).bold() } else { st(FG()) }),
+                        Span::styled(rt.clone(), st(if on { MU() } else { rc })),
+                    ]));
+                }
+            }
+            extra.push(Line::default());
+        }
+        if let Some((sel, det)) = a.tk {
+            let n = a.tasks.len();
+            let sel = sel.min(n.saturating_sub(1));
+            let tsec = |t: &Task| (if t.t1 > 0 { t.t1 } else { a.t }).saturating_sub(t.t0) as f32 / 30.0;
+            let stx = |t: &Task| -> (String, Color) {
+                match t.st {
+                    0 => (dur(tsec(t)), CY()),
+                    1 => (format!("done  {}", dur(tsec(t))), GR()),
+                    2 => ("failed".into(), RD()),
+                    _ => ("stopped".into(), FA()),
+                }
+            };
+            let meta = |t: &Task| -> String {
+                let mut m = vec![];
+                if t.tools > 0 {
+                    m.push(format!("{} tools", t.tools));
+                }
+                if t.toks > 0 {
+                    m.push(format!("{:.1}k tok", t.toks as f32 / 1000.0));
+                }
+                m.join(" · ")
+            };
+            if !det {
+                extra.push(lr(vec![Span::styled("tasks", st(L2()).bold())], vec![Span::styled(format!("{}/{}", a.tasks.iter().filter(|t| t.st == 0).count(), n), st(FA()))], w));
+                let lo = sel.saturating_sub(7).min(n.saturating_sub(8));
+                for (j, t) in a.tasks.iter().enumerate().skip(lo).take(8) {
+                    let on = j == sel;
+                    let (sym, kn, _) = TKIND[t.kind as usize];
+                    let (sx, sc) = stx(t);
+                    let m = meta(t);
+                    let rt = if m.is_empty() { sx.clone() } else { format!("{m}   {sx}") };
+                    let dw = w.saturating_sub(rt.chars().count() + 16);
+                    let d: String = if t.desc.chars().count() > dw { t.desc.chars().take(dw.saturating_sub(1)).collect::<String>() + "…" } else { t.desc.clone() };
+                    let mut l = vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold())];
+                    if t.st == 0 {
+                        l.push(Span::styled(sym, st(grad(&[LI(), CY()], pulse(a.t + j as u64 * 9, 45.0))).bold()));
+                    } else {
+                        l.push(Span::styled(sym, st(if t.st == 2 { RD() } else { FA() })));
+                    }
+                    l.push(Span::styled(format!(" {kn:<9}"), st(MU())));
+                    l.push(Span::styled(d, if on { st(WH()).bold() } else { st(FG()) }));
+                    let mut rr = vec![];
+                    if !m.is_empty() {
+                        rr.push(Span::styled(format!("{m}   "), st(FA())));
+                    }
+                    rr.push(Span::styled(sx, st(sc)));
+                    extra.push(lr(l, rr, w));
+                }
+            } else if let Some(t) = a.tasks.get(sel) {
+                let (sym, kn, _) = TKIND[t.kind as usize];
+                let (sx, sc) = stx(t);
+                extra.push(lr(vec![Span::styled(format!("{sym} {kn}  "), st(L2()).bold()), Span::styled(t.desc.clone(), st(WH()).bold())], vec![Span::styled(sx, st(sc))], w));
+                let m = meta(t);
+                if !m.is_empty() {
+                    extra.push(Line::from(Span::styled(m, st(FA()))));
+                }
+                extra.push(Line::default());
+                let src: Vec<String> = if t.kind <= 1 {
+                    t.out.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect()
+                } else if !t.acts.is_empty() {
+                    t.acts.clone()
+                } else {
+                    t.last.lines().map(str::to_string).collect()
+                };
+                let hh = (ar.height as usize / 3).clamp(4, 14);
+                if src.is_empty() {
+                    extra.push(Line::from(Span::styled("  no output yet", st(FA()))));
+                }
+                for l in src.iter().rev().take(hh).collect::<Vec<_>>().into_iter().rev() {
+                    let mut l = l.clone();
+                    if l.chars().count() > w.saturating_sub(6) {
+                        l = l.chars().take(w.saturating_sub(7)).collect::<String>() + "~";
+                    }
+                    extra.push(Line::from(vec![Span::styled("| ", st(FA())), Span::styled(l, st(MU()))]));
+                }
+                if t.kind == 2 && !t.last.is_empty() && t.acts.last() != Some(&t.last) {
+                    extra.push(Line::from(vec![Span::styled("  ", st(FA())), Span::styled(t.last.lines().next().unwrap_or("").to_string(), st(FG()).italic())]));
+                }
             }
             extra.push(Line::default());
         }
@@ -774,8 +993,21 @@ impl V for V1 {
                 self.sf = tg;
             }
             let mut scr = self.sf.round() as usize;
+            let nb = bl.len();
             let ls = tail(bl, bh as usize, &mut scr);
             let pad_top = bh as usize - ls.len();
+            let s0 = nb.saturating_sub(ls.len() + scr);
+            let mut lk = a.links.borrow_mut();
+            lk.clear();
+            LK.with(|l| {
+                for (i, xa, xb, t) in l.borrow().iter() {
+                    if *i >= s0 && *i < s0 + ls.len() {
+                        let y = top + pad_top as u16 + (*i - s0) as u16;
+                        lk.push((y, x0 + xa, x0 + xb, t.clone()));
+                    }
+                }
+            });
+            drop(lk);
             f.render_widget(Paragraph::new(ls), col(top + pad_top as u16, bh - pad_top as u16));
             if scr > 0 {
                 f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA()))).alignment(Alignment::Right), col(top + bh - 1, 1));
@@ -906,6 +1138,29 @@ impl V for V1 {
             5 => rows[1][2].push(Ch::S(cwd)),
             _ => {}
         }
+        let run: Vec<usize> = (0..4).map(|k| a.tasks.iter().filter(|t| t.st == 0 && t.kind == k as u8).count()).collect();
+        if run.iter().sum::<usize>() > 0 {
+            let mut sp = noise(1, a.t, 420, &gd());
+            sp.push(pad(1));
+            let mut first = true;
+            for (k, &c) in run.iter().enumerate() {
+                if c == 0 {
+                    continue;
+                }
+                if !first {
+                    sp.push(Span::styled(" · ", st(FA())));
+                }
+                first = false;
+                sp.push(Span::styled(c.to_string(), st(FG()).bold()));
+                sp.push(Span::styled(format!(" {}", if c == 1 { TKIND[k].1 } else { TKIND[k].2 }), st(MU())));
+            }
+            rows[1][2].push(Ch::S(sp));
+        }
+        if let Some(h) = a.hooks.iter().find(|h| a.t.saturating_sub(h.2) > 15) {
+            let mut sp = noise(1, a.t, 430, &gd());
+            sp.push(Span::styled(format!(" hook {}", h.1), st(MU())));
+            rows[1][2].push(Ch::S(sp));
+        }
         if !toast.is_empty() {
             rows[1][2].push(Ch::S(toast));
         }
@@ -989,6 +1244,10 @@ fn join(v: &[Ch], us: &[Vec<Span<'static>>], mode: u8) -> Vec<Span<'static>> {
         o.extend(part);
     }
     o
+}
+
+fn dur(s: f32) -> String {
+    if s < 60.0 { format!("{s:.0}s") } else if s < 3600.0 { format!("{}m {:02}s", s as u64 / 60, s as u64 % 60) } else { format!("{}h {:02}m", s as u64 / 3600, s as u64 % 3600 / 60) }
 }
 
 fn main() -> std::io::Result<()> {

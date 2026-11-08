@@ -174,6 +174,7 @@ fn spawn(args: &[String]) -> io::Result<(Child, ChildStdin, Receiver<Value>)> {
             "--replay-user-messages",
             "--prompt-suggestions",
             "true",
+            "--include-hook-events",
         ])
         .args(args)
         .env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1")
@@ -215,6 +216,132 @@ fn rel(p: &str) -> String {
 fn one(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("").trim();
     if l.chars().count() > n { l.chars().take(n).collect::<String>() + "…" } else { l.to_string() }
+}
+
+fn strip(s: &str) -> String {
+    let mut o = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\x1b' {
+            if it.peek() == Some(&'[') {
+                it.next();
+                while let Some(&n) = it.peek() {
+                    it.next();
+                    if ('@'..='~').contains(&n) {
+                        break;
+                    }
+                }
+            } else {
+                it.next();
+            }
+        } else if c == '\r' {
+            if it.peek() != Some(&'\n') {
+                if let Some(p) = o.rfind('\n') {
+                    o.truncate(p + 1);
+                } else {
+                    o.clear();
+                }
+            }
+        } else if c == '\t' {
+            o.push_str("    ");
+        } else if !c.is_control() || c == '\n' {
+            o.push(c);
+        }
+    }
+    o
+}
+
+impl App {
+    fn subact(&mut self, p: &str, line: String) {
+        if let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(p).copied()) {
+            if let Some(B::Tl(t)) = self.bs.get_mut(i) {
+                t.body.push(Ln::P(one(&line, 200)));
+                if t.body.len() > 300 {
+                    t.body.remove(0);
+                }
+            }
+        }
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.tool == p) {
+            t.acts.push(one(&line, 200));
+            if t.acts.len() > 50 {
+                t.acts.remove(0);
+            }
+            t.last = one(&line, 200);
+        }
+    }
+
+    pub(crate) fn fsuggest(&mut self, q: &str) -> bool {
+        if self.lv.is_none() {
+            return false;
+        }
+        self.ctrl("fsg", json!({"subtype": "file_suggestions", "query": q}));
+        true
+    }
+
+    pub(crate) fn setmodel(&mut self, v: &str) {
+        let d = self.models.iter().find(|m| m.0 == v).map(|m| m.1.clone()).unwrap_or_else(|| mnm(v));
+        if let Some(i) = MID.iter().position(|x| v.starts_with(x)) {
+            self.model = i;
+        }
+        self.mname = d.to_lowercase().replace(' ', "-");
+        if self.lv.is_some() {
+            self.ctrl("mdl", json!({"subtype": "set_model", "model": v}));
+        }
+        self.toast(format!("model  {d}"));
+    }
+
+    pub(crate) fn seteffort(&mut self, v: &str) {
+        self.effs = v.to_string();
+        if self.lv.is_some() {
+            self.ctrl("eff", json!({"subtype": "apply_flag_settings", "settings": {"effortLevel": v}}));
+        }
+        self.toast(format!("effort  {v}"));
+    }
+
+    pub(crate) fn mcpact(&mut self, name: &str, toggle: bool) {
+        if self.lv.is_none() {
+            return;
+        }
+        let st = self.pk.as_ref().and_then(|p| p.items.iter().find(|x| x.2 == name)).map(|x| x.1.clone()).unwrap_or_default();
+        if toggle {
+            let en = st.starts_with("disabled");
+            self.ctrl("mct", json!({"subtype": "mcp_toggle", "serverName": name, "enabled": en}));
+            self.toast(format!("{}  {name}", if en { "enabling" } else { "disabling" }));
+        } else {
+            self.ctrl("mcr", json!({"subtype": "mcp_reconnect", "serverName": name}));
+            self.toast(format!("reconnecting  {name}"));
+        }
+    }
+
+    pub(crate) fn tpoll(&mut self, i: usize) {
+        let Some(t) = self.tasks.get(i) else { return };
+        if t.kind > 1 || self.lv.is_none() {
+            return;
+        }
+        let id = t.id.clone();
+        self.ctrl(&format!("tko{i}"), json!({"subtype": "get_task_output", "task_id": id}));
+    }
+
+    pub(crate) fn tstop(&mut self, i: usize) {
+        let Some(t) = self.tasks.get(i) else { return };
+        let (id, d) = (t.id.clone(), t.desc.clone());
+        if self.lv.is_none() {
+            if let Some(t) = self.tasks.get_mut(i) {
+                t.st = 3;
+                t.t1 = self.t.max(1);
+            }
+            return;
+        }
+        self.ctrl("stp", json!({"subtype": "stop_task", "task_id": id}));
+        self.toast(format!("stopping  {}", one(&d, 30)));
+    }
+
+    pub(crate) fn tbg(&mut self) {
+        if self.lv.is_some() && self.busy {
+            self.ctrl("bgt", json!({"subtype": "background_tasks"}));
+            self.toast("moved to background");
+        }
+    }
 }
 
 fn sv(v: &Value, k: &str) -> String {
@@ -341,7 +468,7 @@ impl App {
         }
         let (ch, inp, rx) = spawn(&args).map_err(|e| if e.kind() == io::ErrorKind::NotFound { io::Error::new(e.kind(), "claude not found, install Claude Code first: https://claude.com/claude-code") } else { e })?;
         a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
-        a.ctrl("init", json!({"subtype": "initialize", "hooks": null}));
+        a.ctrl("init", json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}));
         let ar = a.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
         let rid = if let Some(i) = ar.iter().position(|x| x == "-r" || x == "--resume") {
@@ -374,6 +501,12 @@ impl App {
         v.push(("theme".into(), crate::pal::THEMES.iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
         v.push(("background".into(), crate::bg::LIST.into()));
         v.push(("resume".into(), "pick an older session in this folder".into()));
+        for (c, d) in [("model", "pick a model"), ("effort", "pick the effort level"), ("tasks", "background shells, monitors, agents and workflows"), ("mcp", "mcp servers: reconnect, enable or disable"), ("diff", "all changes in this workspace"), ("rename", "name this session")] {
+            if self.lv.is_some() || matches!(c, "model" | "effort" | "tasks") {
+                v.retain(|x| x.0 != c);
+                v.push((c.into(), d.into()));
+            }
+        }
         if self.swok() {
             v.retain(|x| x.0 != "apolloclaw:switch");
             v.push(("switch".into(), "switch between personal and work account".into()));
@@ -439,12 +572,21 @@ impl App {
                     *self = n;
                 }
             }
-            "model" if arg.is_empty() => {
-                self.model = (self.model + 1) % MID.len();
-                let m = MID[self.model];
-                self.ctrl("mdl", json!({"subtype": "set_model", "model": m}));
-                self.mname = mnm(m);
-                self.toast(format!("model  {}", self.mname));
+            "model" if arg.is_empty() => self.modelpicker(),
+            "effort" if arg.is_empty() => self.effortpicker(),
+            "effort" => self.seteffort(arg.trim()),
+            "mcp" if arg.is_empty() => {
+                self.ctrl("mcs", json!({"subtype": "mcp_status"}));
+                self.pk = Some(Pk { kind: 2, title: "mcp".into(), ..Default::default() });
+            }
+            "diff" if arg.is_empty() => {
+                self.ctrl("dif", json!({"subtype": "get_workspace_diff"}));
+                self.pk = Some(Pk { kind: 3, title: "diff".into(), ..Default::default() });
+            }
+            "rename" if !arg.trim().is_empty() => {
+                let t = arg.trim().to_string();
+                self.ctrl("ren", json!({"subtype": "rename_session", "title": t, "source": "host"}));
+                self.stitle = t;
             }
             "quit" | "exit" => self.quit = true,
             "switch" | "apolloclaw:switch" if self.swok() => self.lswitch(),
@@ -648,6 +790,26 @@ impl App {
     }
 
     pub(crate) fn lqa(&mut self, q: Qa, ok: bool) {
+        if q.plan {
+            let a = q.ans.first().map(|x| x.1.clone()).unwrap_or_default();
+            let m = match a.as_str() {
+                "yes, auto mode" => Some(2),
+                "yes, approve edits" => Some(0),
+                "yes, bypass permissions" => Some(3),
+                _ => None,
+            };
+            let r = match m {
+                Some(i) if ok => {
+                    self.mode = i;
+                    self.tm = self.t.max(1);
+                    json!({"behavior": "allow", "updatedInput": q.inp, "updatedPermissions": [{"type": "setMode", "mode": PM[i], "destination": "session"}]})
+                }
+                _ if ok && a != "no, keep planning" => json!({"behavior": "deny", "message": format!("The user wants to keep planning: {a}")}),
+                _ => json!({"behavior": "deny", "message": "The user wants to keep planning."}),
+            };
+            self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": q.id, "response": r}}));
+            return;
+        }
         let r = if ok {
             let mut inp = q.inp.clone();
             let m: serde_json::Map<String, Value> = q.ans.iter().map(|(a, b)| (a.clone(), json!(b))).collect();
@@ -712,7 +874,16 @@ impl App {
 
     fn ev(&mut self, e: Value) {
         let ty = e["type"].as_str().unwrap_or("").to_string();
-        if e.get("parent_tool_use_id").and_then(|v| v.as_str()).is_some() {
+        if let Some(p) = e.get("parent_tool_use_id").and_then(|v| v.as_str()) {
+            let p = p.to_string();
+            if e["type"] == "assistant" {
+                for c in e["message"]["content"].as_array().cloned().unwrap_or_default() {
+                    if c["type"] == "tool_use" {
+                        let t = mk(&sv(&c, "name"), &c["input"]);
+                        self.subact(&p, format!("{} {}", t.nm, t.a).trim().to_string());
+                    }
+                }
+            }
             return;
         }
         match ty.as_str() {
@@ -737,9 +908,134 @@ impl App {
                     }
                 }
                 "compact_boundary" => self.bs.push(B::Sys("conversation compacted".into())),
+                "local_command_output" => {
+                    let c = strip(&sv(&e, "content"));
+                    if !c.trim().is_empty() {
+                        self.bs.push(B::T(c.trim().to_string()));
+                    }
+                }
+                "api_retry" | "api_error" => {
+                    let (at, mx) = (e["attempt"].as_u64().or(e["retry_attempt"].as_u64()).unwrap_or(0), e["max_retries"].as_u64().unwrap_or(0));
+                    let ms = e["retry_delay_ms"].as_u64().or(e["retry_in_ms"].as_u64()).unwrap_or(0);
+                    let st = e["error_status"].as_u64().or(e["error"]["status"].as_u64());
+                    let why = match st {
+                        Some(429) => "rate limited".to_string(),
+                        Some(529) => "overloaded".to_string(),
+                        Some(s) => format!("error {s}"),
+                        None => "connection error".to_string(),
+                    };
+                    self.retry = Some((format!("{why}  ·  attempt {at}/{mx}"), self.t + ms * 30 / 1000));
+                }
+                "model_fallback" => {
+                    let c = sv(&e, "content");
+                    let f = sv(&e, "fallback_model");
+                    self.bs.push(B::Sys(if c.is_empty() { format!("switched to {} ({})", mnm(&f), sv(&e, "trigger").replace('_', " ")) } else { one(&c, 200) }));
+                }
+                "notification" => {
+                    let t = sv(&e, "text");
+                    if !t.is_empty() {
+                        self.toast(one(&t, 60));
+                    }
+                }
+                "permission_denied" => {
+                    let r = sv(&e, "decision_reason_type");
+                    let t = mk(&sv(&e, "tool_name"), &Value::Null);
+                    self.bs.push(B::Sys(format!("{} denied{}", t.nm, if r.is_empty() { String::new() } else { format!(" by {r}") })));
+                }
+                "session_title_changed" => self.stitle = one(&sv(&e, "title"), 80),
+                "hook_started" => {
+                    let id = sv(&e, "hook_id");
+                    let now = self.t;
+                    self.hooks.retain(|h| h.0 != id);
+                    self.hooks.push((id, sv(&e, "hook_event"), now));
+                }
+                "hook_response" => {
+                    let id = sv(&e, "hook_id");
+                    self.hooks.retain(|h| h.0 != id);
+                    let code = e["exit_code"].as_i64().unwrap_or(0);
+                    if sv(&e, "outcome") == "error" || code == 2 {
+                        let er = strip(&sv(&e, "stderr"));
+                        let er = er.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+                        self.bs.push(B::Sys(format!("hook {} {}{}", sv(&e, "hook_event"), if code == 2 { "blocked" } else { "failed" }, if er.is_empty() { String::new() } else { format!(": {}", one(&er, 120)) })));
+                    }
+                }
+                "stop_hook_summary" => {
+                    let errs: Vec<String> = e["hook_errors"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(|s| one(s, 120))).collect();
+                    if e["prevented_continuation"] == true {
+                        self.bs.push(B::Sys(format!("stop hook kept going{}", errs.first().map(|x| format!(": {x}")).unwrap_or_default())));
+                    } else if let Some(x) = errs.first() {
+                        self.bs.push(B::Sys(format!("stop hook error: {x}")));
+                    }
+                }
+                "task_started" => {
+                    let id = sv(&e, "task_id");
+                    let ty = sv(&e, "task_type");
+                    let kind = match ty.as_str() {
+                        "local_bash" => 0,
+                        t if t.starts_with("monitor") => 1,
+                        t if t.contains("workflow") => 3,
+                        _ => 2,
+                    };
+                    let mut desc = sv(&e, "description");
+                    if desc.is_empty() {
+                        desc = sv(&e, "workflow_name");
+                    }
+                    let now = self.t.max(1);
+                    let tool = sv(&e, "tool_use_id");
+                    match self.tasks.iter_mut().find(|t| t.id == id) {
+                        Some(t) => {
+                            t.desc = desc;
+                            t.st = 0;
+                        }
+                        None => self.tasks.push(Task { id, kind, desc: one(&desc, 200), t0: now, tool, ..Default::default() }),
+                    }
+                }
+                "task_progress" => {
+                    let id = sv(&e, "task_id");
+                    if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                        let s = sv(&e, "summary");
+                        let l = sv(&e, "last_tool_name");
+                        if !s.is_empty() {
+                            t.last = one(&s, 200);
+                        } else if !l.is_empty() {
+                            t.last = l;
+                        }
+                        t.tools = e["usage"]["tool_uses"].as_u64().unwrap_or(t.tools);
+                        t.toks = e["usage"]["total_tokens"].as_u64().unwrap_or(t.toks);
+                    }
+                }
+                "task_updated" | "task_notification" => {
+                    let id = sv(&e, "task_id");
+                    let st = if e["subtype"] == "task_updated" { sv(&e["patch"], "status") } else { sv(&e, "status") };
+                    let now = self.t.max(1);
+                    if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                        let n = match st.as_str() {
+                            "" => t.st,
+                            "running" | "pending" => 0,
+                            "completed" | "done" | "success" => 1,
+                            "failed" | "error" => 2,
+                            _ => 3,
+                        };
+                        if n != 0 && t.st == 0 {
+                            t.t1 = now;
+                        }
+                        t.st = n;
+                        let s = sv(&e, "summary");
+                        if !s.is_empty() {
+                            t.last = one(&s, 200);
+                        }
+                        let d = sv(&e["patch"], "description");
+                        if !d.is_empty() {
+                            t.desc = one(&d, 200);
+                        }
+                    }
+                }
                 _ => {}
             },
-            "stream_event" => self.se(&e["event"]),
+            "stream_event" => {
+                self.retry = None;
+                self.se(&e["event"])
+            }
             "assistant" => {
                 for c in e["message"]["content"].as_array().cloned().unwrap_or_default() {
                     if c["type"] == "tool_use" {
@@ -788,8 +1084,21 @@ impl App {
                         self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {"behavior": "allow", "updatedInput": r["input"].clone()}}}));
                     } else {
                         let n = qs[0].opts.len();
-                        self.qa = Some(Qa { id, inp: r["input"].clone(), qs, i: 0, sel: 0, pick: vec![false; n], ans: vec![] });
+                        self.qa = Some(Qa { id, inp: r["input"].clone(), qs, i: 0, sel: 0, pick: vec![false; n], ans: vec![], plan: false });
                     }
+                } else if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "ExitPlanMode" {
+                    let plan = sv(&r["input"], "plan");
+                    if !plan.trim().is_empty() {
+                        self.bs.push(B::T(plan.trim().to_string()));
+                    }
+                    let opts = vec![
+                        ("yes, auto mode".to_string(), "Claude works on its own, the classifier checks risky steps".to_string()),
+                        ("yes, approve edits".to_string(), "you approve each edit and command".to_string()),
+                        ("yes, bypass permissions".to_string(), "no questions at all".to_string()),
+                        ("no, keep planning".to_string(), String::new()),
+                    ];
+                    let id = sv(&e, "request_id");
+                    self.qa = Some(Qa { id, inp: r["input"].clone(), qs: vec![Qq { q: "Ready to code?".into(), h: "plan".into(), opts, multi: false }], i: 0, sel: 0, pick: vec![false; 4], ans: vec![], plan: true });
                 } else if r["subtype"] == "can_use_tool" {
                     let name = sv(r, "tool_name");
                     let t = mk(&name, &r["input"]);
@@ -815,6 +1124,10 @@ impl App {
                     let ar = self.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
                     let want = ar.iter().position(|x| x == "--model").and_then(|i| ar.get(i + 1)).cloned().unwrap_or_else(|| "default".into());
                     if let Some(ms) = p["models"].as_array() {
+                        let v: Vec<(String, String, String, Vec<String>)> = ms.iter().filter(|m| m["disabled"] != true).map(|m| (sv(m, "value"), sv(m, "displayName"), sv(m, "description"), m["supportedEffortLevels"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(str::to_string)).collect())).collect();
+                        if !v.is_empty() {
+                            self.models = v;
+                        }
                         let m = ms.iter().find(|m| sv(m, "value") == want).map(|m| sv(m, "resolvedModel")).filter(|x| !x.is_empty()).unwrap_or(want.clone());
                         if self.mname == "…" {
                             self.mname = mnm(&m);
@@ -838,6 +1151,58 @@ impl App {
                         if conv {
                             self.rconv(i);
                         }
+                    }
+                } else if let Some(r) = id.strip_prefix("tko") {
+                    let i: usize = r.split('-').next().and_then(|x| x.parse().ok()).unwrap_or(usize::MAX);
+                    let o = p["output"].as_str().map(str::to_string).or_else(|| p.as_object().and_then(|m| m.values().find_map(|v| v.as_str().map(str::to_string)))).unwrap_or_default();
+                    if let Some(t) = self.tasks.get_mut(i) {
+                        t.out = strip(&o);
+                    }
+                } else if id.starts_with("fsg") {
+                    self.fsug = p["suggestions"].as_array().cloned().unwrap_or_default().iter().map(|x| sv(x, "path")).filter(|x| !x.is_empty()).take(12).collect();
+                    self.ms = 0;
+                } else if id.starts_with("mcs") {
+                    let rows: Vec<(String, String, String)> = p["mcpServers"].as_array().cloned().unwrap_or_default().iter().map(|x| {
+                        let st = sv(x, "status");
+                        let er = sv(x, "error");
+                        let n = x["tools"].as_array().map(|t| t.len()).unwrap_or(0);
+                        let r = if st == "connected" && n > 0 { format!("{n} tools  connected") } else if !er.is_empty() { format!("{st}  {}", one(&er, 40)) } else { st };
+                        (sv(x, "name"), r, sv(x, "name"))
+                    }).collect();
+                    if let Some(k) = &mut self.pk {
+                        if k.kind == 2 {
+                            k.sel = k.sel.min(rows.len().saturating_sub(1));
+                            k.items = rows;
+                        }
+                    }
+                } else if id.starts_with("mcr") || id.starts_with("mct") {
+                    if r["subtype"] == "error" {
+                        self.toast(one(&sv(r, "error"), 60));
+                    }
+                    self.ctrl("mcs", json!({"subtype": "mcp_status"}));
+                } else if id.starts_with("dif") {
+                    let d = p["diff"].clone();
+                    let rows: Vec<(String, String, String)> = d["perFileStats"].as_array().cloned().unwrap_or_default().iter().map(|x| {
+                        let st = sv(x, "status");
+                        let r = if x["isBinary"] == true { "binary".to_string() } else { format!("+{} -{}", x["added"].as_u64().unwrap_or(0), x["removed"].as_u64().unwrap_or(0)) };
+                        let path = sv(x, "path");
+                        let label = if x["isUntracked"] == true { format!("{path}  new") } else if !st.is_empty() && st != "modified" { format!("{path}  {st}") } else { path.clone() };
+                        (label, r, path)
+                    }).collect();
+                    let s = &d["stats"];
+                    if let Some(k) = &mut self.pk {
+                        if k.kind == 3 {
+                            k.title = format!("diff  {} files  +{} -{}", s["filesCount"].as_u64().unwrap_or(0), s["linesAdded"].as_u64().unwrap_or(0), s["linesRemoved"].as_u64().unwrap_or(0));
+                            k.items = rows;
+                        }
+                    }
+                    if r["subtype"] == "error" {
+                        self.toast(one(&sv(r, "error"), 60));
+                    }
+                    self.diff = Some(d);
+                } else if id.starts_with("stp") {
+                    if r["subtype"] == "error" {
+                        self.toast(format!("not stopped  {}", one(&sv(r, "error"), 40)));
                     }
                 } else if id.starts_with("ctx") {
                     let t = p["totalTokens"].as_f64().unwrap_or(0.0);
@@ -1037,7 +1402,7 @@ impl App {
         self.busy = false;
         self.inp = txt;
         self.cur = self.inp.chars().count();
-        self.ctrl("init", json!({"subtype": "initialize", "hooks": null}));
+        self.ctrl("init", json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}));
         self.toast("rewound");
     }
 
@@ -1167,6 +1532,10 @@ impl App {
             t.st = St::Ok;
             match t.k {
                 Tk::Edit => {}
+                Tk::Task => {
+                    let n = t.body.len();
+                    t.sum = if n > 0 { format!("{n} tools") } else { "done".into() };
+                }
                 Tk::Read => t.sum = format!("{} lines", txt.lines().count()),
                 Tk::Grep => t.sum = format!("{} results", ls.len()),
                 Tk::Bash => {
