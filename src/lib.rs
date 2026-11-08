@@ -1946,8 +1946,8 @@ pub const LAYOUT: [(&str, &[&str]); 5] = [
     ("input", &["bottom", "top"]),
     ("usage", &["bottom left", "bottom right", "top left", "top right", "off"]),
     ("model", &["top", "bottom", "off"]),
-    ("title", &["top left", "top center", "top right", "bottom right"]),
-    ("title visibility", &["off", "on start", "always"]),
+    ("title", &["middle", "top left", "top center", "top right", "bottom right"]),
+    ("title visibility", &["on start", "always", "off"]),
 ];
 static LSET: [std::sync::atomic::AtomicU8; 5] = [const { std::sync::atomic::AtomicU8::new(u8::MAX) }; 5];
 

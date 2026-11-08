@@ -713,36 +713,55 @@ impl V for V1 {
         let eh = extra.len() as u16;
         let h = ar.height;
         let top_in = lay(0) == 1;
-        let bh = h.saturating_sub(ih as u16 + bwh + eh + 6);
+        let tvis = match lay(4) {
+            0 => !a.bs.iter().any(|b| matches!(b, B::U(..))),
+            1 => true,
+            _ => false,
+        };
+        let tp = lay(3);
+        let lgw = LOGO[0].chars().count();
+        let tvis = tvis && w >= lgw + 4 && h >= 24;
+        let rt = if tvis && (1..=3).contains(&tp) { 5u16 } else { 0 };
+        let rb = if tvis && tp == 4 { 5u16 } else { 0 };
+        let bh = h.saturating_sub(ih as u16 + bwh + eh + 6 + rt + rb);
         let (top, ey, ry, iy, bty) = if top_in {
-            let iy = 2u16;
+            let iy = 2u16 + rt;
             let ry = iy + ih as u16;
             let bty = ry + 1;
             let ey = bty + bwh;
             (ey + eh + 1, ey, ry, iy, bty)
         } else {
-            let top = 2u16;
+            let top = 2u16 + rt;
             let ey = top + bh + 1;
             let ry = ey + eh;
             let iy = ry + 1;
             (top, ey, ry, iy, iy + ih as u16)
         };
-        let sy = if top_in { h.saturating_sub(1) } else { bty + bwh + 1 };
+        let sy = if top_in { h.saturating_sub(1) } else { bty + bwh + 1 + rb };
+        let lgx = match tp {
+            1 => x0,
+            2 => x0 + (w - lgw.min(w)) as u16 / 2,
+            _ => x0 + (w - lgw.min(w)) as u16,
+        };
+        let lgel = a.t.saturating_sub(a.tc) * 2;
+        let lgy = if rt > 0 { Some(0u16) } else if rb > 0 { Some(sy - 5) } else { None };
+        if let Some(y0) = lgy {
+            for (i, l) in LOGO.iter().enumerate() {
+                let sp = unlig(decode(l, lgel.saturating_sub(i as u64 * 6), a.t, i as u64 + 50, st(LI()), &gd()));
+                f.render_widget(Paragraph::new(Line::from(sp)), Rect { x: lgx, y: y0 + i as u16, width: lgw as u16, height: 1 });
+            }
+        }
         let col = |y: u16, hh: u16| Rect { x: x0, y, width: w as u16, height: hh };
 
 
+        let mid = tvis && tp == 0 && bh >= 6;
         if a.bs.is_empty() {
-            let lg = [
-                r"   ____  ____  ____  ____ _____ ___  ___ ",
-                r"  / __ \/ __ \/ __ \/ __ `/ __ `__ \/ _ \",
-                r" / / / / /_/ / / / / /_/ / / / / / /  __/",
-                r"/_/ /_/\____/_/ /_/\__,_/_/ /_/ /_/\___/ ",
-            ];
-            let y = top + bh / 2 - 3;
-            let el = a.t.saturating_sub(a.tc) * 2;
-            for (i, l) in lg.iter().enumerate() {
-                let sp = unlig(decode(l, el.saturating_sub(i as u64 * 6), a.t, i as u64 + 50, st(LI()), &gd()));
-                f.render_widget(Paragraph::new(Line::from(sp)).alignment(Alignment::Center), col(y + i as u16, 1));
+            if mid {
+                let y = top + bh / 2 - 3;
+                for (i, l) in LOGO.iter().enumerate() {
+                    let sp = unlig(decode(l, lgel.saturating_sub(i as u64 * 6), a.t, i as u64 + 50, st(LI()), &gd()));
+                    f.render_widget(Paragraph::new(Line::from(sp)).alignment(Alignment::Center), col(y + i as u16, 1));
+                }
             }
         } else {
             let bl = body(a, w);
@@ -760,6 +779,26 @@ impl V for V1 {
             f.render_widget(Paragraph::new(ls), col(top + pad_top as u16, bh - pad_top as u16));
             if scr > 0 {
                 f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA()))).alignment(Alignment::Right), col(top + bh - 1, 1));
+            }
+            if mid {
+                let y0 = top + bh / 2 - 2;
+                let xl = x0 + (w - lgw) as u16 / 2;
+                let c = grad(&[FA(), BASE()], 0.45);
+                let buf = f.buffer_mut();
+                let mut put = vec![];
+                let clear = (y0.saturating_sub(1)..y0 + 5).all(|y| (xl.saturating_sub(2)..xl + lgw as u16 + 2).all(|x| buf.cell((x, y)).is_none_or(|k| k.symbol() == " ")));
+                for (i, l) in LOGO.iter().enumerate() {
+                    for (j, ch) in l.chars().enumerate() {
+                        if clear && ch != ' ' {
+                            put.push((xl + j as u16, y0 + i as u16, ch));
+                        }
+                    }
+                }
+                for (x, y, ch) in put {
+                    if let Some(k) = buf.cell_mut((x, y)) {
+                        k.set_char(ch).set_style(st(c));
+                    }
+                }
             }
         }
         f.render_widget(Paragraph::new(extra), col(ey, eh));
@@ -856,17 +895,8 @@ impl V for V1 {
         if !a.effs.is_empty() {
             model.push(Span::styled(format!("  {}", a.effs), st(FA())));
         }
-        let tvis = match lay(4) {
-            0 => false,
-            1 => !a.bs.iter().any(|b| matches!(b, B::U(..))),
-            _ => true,
-        };
-        let ttl = decode("noname", a.t / 2, a.t, 43, st(LI()).bold(), &gd());
         let cwd = vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))];
         let mut rows: [[Vec<Ch>; 3]; 2] = Default::default();
-        if tvis && lay(3) == 0 {
-            rows[0][0].push(Ch::S(ttl.clone()));
-        }
         rows[0][0].push(Ch::S(cwd));
         if !toast.is_empty() {
             rows[1][2].push(Ch::S(toast));
@@ -883,15 +913,7 @@ impl V for V1 {
             1 => rows[1][2].push(Ch::S(model)),
             _ => {}
         }
-        if tvis {
-            match lay(3) {
-                1 => rows[0][1].push(Ch::S(ttl)),
-                2 => rows[0][2].push(Ch::S(ttl)),
-                3 => rows[1][2].push(Ch::S(ttl)),
-                _ => {}
-            }
-        }
-        for (ri, y) in [(0usize, 0u16), (1, sy)] {
+        for (ri, y) in [(0usize, rt), (1, sy)] {
             let [l, c, r] = &rows[ri];
             let c = join(c, &shown, 2);
             let cwn = sw(&c);
@@ -919,6 +941,13 @@ impl V for V1 {
         }
     }
 }
+
+const LOGO: [&str; 4] = [
+    r"   ____  ____  ____  ____ _____ ___  ___ ",
+    r"  / __ \/ __ \/ __ \/ __ `/ __ `__ \/ _ \",
+    r" / / / / /_/ / / / / /_/ / / / / / /  __/",
+    r"/_/ /_/\____/_/ /_/\__,_/_/ /_/ /_/\___/ ",
+];
 
 #[derive(Clone)]
 enum Ch {
