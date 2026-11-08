@@ -14,7 +14,7 @@ use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers as Km, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    KeyModifiers as Km, KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
@@ -293,6 +293,9 @@ pub struct App {
     pub models: Vec<(String, String, String, Vec<String>)>,
     pub links: std::cell::RefCell<Vec<(u16, u16, u16, String)>>,
     pub diff: Option<serde_json::Value>,
+    pub msel: Option<(u16, u16, u16, u16)>,
+    pub seld: bool,
+    pub txt: std::cell::RefCell<Option<ratatui::buffer::Buffer>>,
 }
 
 #[derive(Clone, Default)]
@@ -524,6 +527,9 @@ impl App {
             models: MID_ALL.iter().map(|(v, d)| (v.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect())).collect(),
             links: std::cell::RefCell::new(vec![]),
             diff: None,
+            msel: None,
+            seld: false,
+            txt: std::cell::RefCell::new(None),
             tf: false,
         }
     }
@@ -2196,7 +2202,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     }
     while !a.quit {
         a.cp.set(None);
-        let cf = term.draw(|f| v.draw(f, &a))?;
+        let cf = term.draw(|f| {
+            v.draw(f, &a);
+            selhl(f.buffer_mut(), a.msel);
+        })?;
         if let Ok(p) = std::env::var("NONAME_SHOT") {
             if p.contains("{}") {
                 if a.t % 3 == 0 {
@@ -2223,15 +2232,52 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         while event::poll(dl.saturating_duration_since(Instant::now()))? {
             match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    if !a.seld {
+                        a.msel = None;
+                    }
                     if !v.key(&k, &mut a) {
                         a.key(k)
                     }
                 }
                 Event::Paste(s) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => a.paste(s),
                 Event::Mouse(m) => match m.kind {
-                    MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left) => a.click(m.column, m.row),
-                    MouseEventKind::ScrollUp => a.scr = (a.scr + 3).min(a.smax.get()),
-                    MouseEventKind::ScrollDown => a.scr = a.scr.saturating_sub(3),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        a.msel = Some((m.column, m.row, m.column, m.row));
+                        a.seld = true;
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) if a.seld => {
+                        if let Some(s) = &mut a.msel {
+                            s.2 = m.column;
+                            s.3 = m.row;
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) if a.seld => {
+                        a.seld = false;
+                        match a.msel {
+                            Some((x0, y0, x1, y1)) if (x0, y0) == (x1, y1) => {
+                                a.msel = None;
+                                a.click(m.column, m.row);
+                            }
+                            Some(s) => {
+                                let t = a.txt.borrow().as_ref().map(|b| seltext(b, s)).unwrap_or_default();
+                                if t.trim().is_empty() {
+                                    a.msel = None;
+                                } else {
+                                    copy(&t);
+                                    a.toast("copied");
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        a.msel = None;
+                        a.scr = (a.scr + 3).min(a.smax.get())
+                    }
+                    MouseEventKind::ScrollDown => {
+                        a.msel = None;
+                        a.scr = a.scr.saturating_sub(3)
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -2249,6 +2295,64 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         a.step();
     }
     Ok(())
+}
+
+fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
+    let (a, b) = ((s.1, s.0), (s.3, s.2));
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>) {
+    let Some(s) = s else { return };
+    if (s.0, s.1) == (s.2, s.3) {
+        return;
+    }
+    let ((y0, x0), (y1, x1)) = selnorm(s);
+    let ar = b.area;
+    for y in y0..=y1.min(ar.height.saturating_sub(1)) {
+        let xa = if y == y0 { x0 } else { 0 };
+        let xb = if y == y1 { x1 } else { ar.width.saturating_sub(1) };
+        for x in xa..=xb.min(ar.width.saturating_sub(1)) {
+            let c = &mut b[(x, y)];
+            c.set_style(c.style().add_modifier(ratatui::style::Modifier::REVERSED));
+        }
+    }
+}
+
+fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
+    let ((y0, x0), (y1, x1)) = selnorm(s);
+    let ar = b.area;
+    let mut ls: Vec<String> = vec![];
+    for y in y0..=y1.min(ar.height.saturating_sub(1)) {
+        let xa = if y == y0 { x0 } else { 0 };
+        let xb = if y == y1 { x1 } else { ar.width.saturating_sub(1) };
+        let mut l = String::new();
+        let mut skip = 0;
+        for x in 0..=xb.min(ar.width.saturating_sub(1)) {
+            let sy = b[(x, y)].symbol();
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            skip = unicode_width::UnicodeWidthStr::width(sy).saturating_sub(1);
+            if x >= xa {
+                l.push_str(sy);
+            }
+        }
+        ls.push(l.trim_end().to_string());
+    }
+    let ind = ls.iter().skip(1).filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+    let mut o: Vec<String> = ls.iter().enumerate().map(|(i, l)| if i == 0 { l.trim_start().to_string() } else { l.get(ind.min(l.len())..).unwrap_or("").to_string() }).collect();
+    while o.last().is_some_and(|l| l.is_empty()) {
+        o.pop();
+    }
+    o.join("\n")
+}
+
+fn copy(t: &str) {
+    let _ = write!(io::stdout(), "\x1b]52;c;{}\x07", img::b64(t.as_bytes()));
+    let _ = io::stdout().flush();
+    sys::setclip(t);
 }
 
 fn cur_label(q: &Option<Qa>, j: usize) -> String {

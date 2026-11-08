@@ -240,3 +240,24 @@ pub fn month() -> i32 {
         st.wMonth as i32 - 1
     }
 }
+
+pub fn setclip(t: &str) {
+    let c: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
+        Some(("pbcopy", &[]))
+    } else if cfg!(windows) {
+        None
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-copy").is_some() {
+        Some(("wl-copy", &[]))
+    } else if which("xclip").is_some() {
+        Some(("xclip", &["-selection", "clipboard"]))
+    } else {
+        None
+    };
+    let Some((p, a)) = c else { return };
+    let Ok(mut ch) = Command::new(p).args(a).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return };
+    if let Some(mut i) = ch.stdin.take() {
+        use std::io::Write;
+        let _ = i.write_all(t.as_bytes());
+    }
+    std::thread::spawn(move || ch.wait());
+}

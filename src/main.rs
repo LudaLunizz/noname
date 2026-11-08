@@ -1199,6 +1199,9 @@ impl V for V1 {
             let ar = f.area();
             self.bg = a.bgw.and_then(|k| noname::bg::Bg::new(k, ar.height, ar.width).ok());
         }
+        if a.msel.is_some() {
+            *a.txt.borrow_mut() = Some(f.buffer_mut().clone());
+        }
         if let Some(b) = &mut self.bg {
             b.paint(f.buffer_mut(), a.t);
         }
