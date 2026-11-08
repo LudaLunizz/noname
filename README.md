@@ -60,6 +60,8 @@ Other flags go straight to `claude`.
 | `shift+tab` | cycle mode | `/resume` | older sessions |
 | `ctrl+o` | details | `/btw` | side question |
 | `→` | accept suggestion | `/model` | cycle models |
+| `ctrl+v` | paste image | | |
+| `ctrl+backspace` | delete word | | |
 
 Every Claude Code command and skill works as usual.
 
