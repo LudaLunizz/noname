@@ -145,10 +145,12 @@ fn out(c: &mut Command) -> Option<Vec<u8>> {
     if o.status.success() && !o.stdout.is_empty() { Some(o.stdout) } else { None }
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 fn pick(types: &str) -> Option<&'static str> {
     ["image/png", "image/jpeg", "image/webp", "image/gif"].into_iter().find(|t| types.lines().any(|l| l.trim() == *t))
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 fn uris(b: &[u8]) -> Vec<PathBuf> {
     String::from_utf8_lossy(b).lines().map(str::trim).filter(|l| l.starts_with("file://")).map(norm).filter(|p| isimg(p)).collect()
 }
