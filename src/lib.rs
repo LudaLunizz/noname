@@ -279,6 +279,8 @@ pub struct App {
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub tasks: Vec<Task>,
+    /// last text copied with a mouse selection; right-click pastes it when no clipboard tool is there
+    pub clip: String,
     pub tk: Option<(usize, bool)>,
     tkp: u64,
     pub pk: Option<Pk>,
@@ -513,6 +515,7 @@ impl App {
             le: 0,
             imgs: vec![],
             tasks: vec![],
+            clip: String::new(),
             tk: None,
             tkp: 0,
             pk: None,
@@ -2263,11 +2266,20 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                                 if t.trim().is_empty() {
                                     a.msel = None;
                                 } else {
-                                    copy(&t);
-                                    a.toast("copied");
+                                    let n = t.chars().count();
+                                    let sys = copy(&t);
+                                    a.clip = t;
+                                    a.toast(if sys { format!("copied {n} chars") } else { format!("copied {n} chars · no wl-copy/xclip, right-click pastes here") });
                                 }
                             }
                             None => {}
+                        }
+                    }
+                    MouseEventKind::Down(MouseButton::Right) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
+                        a.msel = None;
+                        match sys::getclip().or_else(|| (!a.clip.is_empty()).then(|| a.clip.clone())) {
+                            Some(t) => a.paste(t),
+                            None => a.toast("clipboard is empty"),
                         }
                     }
                     MouseEventKind::ScrollUp => {
@@ -2349,10 +2361,10 @@ fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
     o.join("\n")
 }
 
-fn copy(t: &str) {
+fn copy(t: &str) -> bool {
     let _ = write!(io::stdout(), "\x1b]52;c;{}\x07", img::b64(t.as_bytes()));
     let _ = io::stdout().flush();
-    sys::setclip(t);
+    sys::setclip(t)
 }
 
 fn cur_label(q: &Option<Qa>, j: usize) -> String {

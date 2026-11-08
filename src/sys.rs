@@ -241,7 +241,9 @@ pub fn month() -> i32 {
     }
 }
 
-pub fn setclip(t: &str) {
+/// Puts text on the system clipboard. Returns false when no clipboard tool was found,
+/// so the caller can say that only the terminal's own clipboard (OSC 52) was tried.
+pub fn setclip(t: &str) -> bool {
     let c: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
         Some(("pbcopy", &[]))
     } else if cfg!(windows) {
@@ -253,11 +255,35 @@ pub fn setclip(t: &str) {
     } else {
         None
     };
-    let Some((p, a)) = c else { return };
-    let Ok(mut ch) = Command::new(p).args(a).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return };
+    let Some((p, a)) = c else { return cfg!(windows) };
+    let Ok(mut ch) = Command::new(p).args(a).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return false };
     if let Some(mut i) = ch.stdin.take() {
         use std::io::Write;
         let _ = i.write_all(t.as_bytes());
     }
     std::thread::spawn(move || ch.wait());
+    true
+}
+
+/// Reads text from the system clipboard, if a clipboard tool is there.
+pub fn getclip() -> Option<String> {
+    let c: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
+        Some(("pbpaste", &[]))
+    } else if cfg!(windows) {
+        Some(("powershell", &["-NoProfile", "-Command", "Get-Clipboard -Raw"]))
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-paste").is_some() {
+        Some(("wl-paste", &["--no-newline"]))
+    } else if which("xclip").is_some() {
+        Some(("xclip", &["-selection", "clipboard", "-o"]))
+    } else {
+        None
+    };
+    let (p, a) = c?;
+    let o = Command::new(p).args(a).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let t = String::from_utf8_lossy(&o.stdout).into_owned();
+    let t = if cfg!(windows) { t.trim_end_matches(['\r', '\n']).to_string() } else { t };
+    if t.is_empty() { None } else { Some(t) }
 }
