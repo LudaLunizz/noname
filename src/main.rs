@@ -251,6 +251,49 @@ fn link(i: usize, x: usize, len: usize, t: &str) {
     }
 }
 
+/// Web links in a rendered line: (start column, end column, url).
+fn urls(l: &Line) -> Vec<(u16, u16, String)> {
+    let mut cs: Vec<(usize, char)> = vec![];
+    let mut x = 0;
+    for sp in &l.spans {
+        for c in sp.content.chars() {
+            cs.push((x, c));
+            x += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        }
+    }
+    let t: Vec<char> = cs.iter().map(|c| c.1).collect();
+    let mut o = vec![];
+    let mut i = 0;
+    while i < t.len() {
+        let rest: String = t[i..t.len().min(i + 8)].iter().collect();
+        if !(rest.starts_with("https://") || rest.starts_with("http://")) || (i > 0 && t[i - 1].is_alphanumeric()) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < t.len() && !t[j].is_whitespace() && !matches!(t[j], '<' | '>' | '"' | '`' | '│' | '…') {
+            j += 1;
+        }
+        let mut e = j;
+        while e > i && matches!(t[e - 1], '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '*' | '_') {
+            e -= 1;
+        }
+        // a closing bracket belongs to the url only when it opened inside it
+        while e > i && matches!(t[e - 1], ')' | ']') {
+            let (op, cl) = if t[e - 1] == ')' { ('(', ')') } else { ('[', ']') };
+            let n = |c: char| t[i..e].iter().filter(|&&x| x == c).count();
+            if n(cl) > n(op) { e -= 1 } else { break }
+        }
+        let u: String = t[i..e].iter().collect();
+        if u.len() > 10 {
+            let xb = cs.get(e).map(|c| c.0).unwrap_or(x);
+            o.push((cs[i].0 as u16, xb as u16, u));
+        }
+        i = j.max(i + 1);
+    }
+    o
+}
+
 fn body(a: &App, w: usize) -> Vec<Line<'static>> {
     LK.with(|l| l.borrow_mut().clear());
     let m = mdt();
@@ -1020,8 +1063,26 @@ impl V for V1 {
                     }
                 }
             });
+            let y0 = top + pad_top as u16;
+            let mut ul = vec![];
+            for (k, l) in ls.iter().enumerate() {
+                for (xa, xb, u) in urls(l) {
+                    if !lk.iter().any(|x| x.0 == y0 + k as u16 && x.1 < x0 + xb && x0 + xa < x.2) {
+                        lk.push((y0 + k as u16, x0 + xa, x0 + xb, u));
+                        ul.push((y0 + k as u16, x0 + xa, x0 + xb));
+                    }
+                }
+            }
             drop(lk);
             f.render_widget(Paragraph::new(ls), col(top + pad_top as u16, bh - pad_top as u16));
+            let buf = f.buffer_mut();
+            for (y, xa, xb) in ul {
+                for x in xa..xb {
+                    if let Some(c) = buf.cell_mut((x, y)) {
+                        c.set_style(c.style().add_modifier(ratatui::style::Modifier::UNDERLINED));
+                    }
+                }
+            }
             if scr > 0 {
                 f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA()))).alignment(Alignment::Right), col(top + bh - 1, 1));
             }
@@ -1337,4 +1398,24 @@ fn dur(s: f32) -> String {
 fn main() -> std::io::Result<()> {
     pal::load();
     run(V1 { db: [0.0; 3], lt: 0, sf: 0.0, bg: None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u(s: &str) -> Vec<String> {
+        urls(&Line::from(s.to_string())).into_iter().map(|x| x.2).collect()
+    }
+
+    #[test]
+    fn finds_web_links() {
+        assert_eq!(u("see https://example.com/a?b=1."), ["https://example.com/a?b=1"]);
+        assert_eq!(u("[docs](https://example.com/x)"), ["https://example.com/x"]);
+        assert_eq!(u("https://en.wikipedia.org/wiki/Rust_(language))"), ["https://en.wikipedia.org/wiki/Rust_(language)"]);
+        assert_eq!(u("two: http://a.example/1 and <https://b.example/2>"), ["http://a.example/1", "https://b.example/2"]);
+        assert!(u("no link, xhttps://nope.example and https://").is_empty());
+        let l = Line::from(vec![Span::raw("  é "), Span::raw("https://example.com")]);
+        assert_eq!(urls(&l)[0].0, 4);
+    }
 }
