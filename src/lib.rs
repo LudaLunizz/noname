@@ -2203,7 +2203,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         App::live(args)?
     };
     let mut lt = String::new();
-    sys::on_close(live::killall);
+    sys::on_close(bye);
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
         a.upcheck(false);
@@ -2301,8 +2301,37 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             }
         }
         a.step();
+        if std::env::var("NONAME_MOCK").is_err() {
+            let sid = a.session_id();
+            if let Ok(mut s) = SID.lock() {
+                if *s != sid {
+                    *s = sid;
+                }
+            }
+        }
     }
+    // give the terminal back before stopping claude (that can take a second), so a
+    // second ctrl+c or mouse movement in that time does not land in a half-restored screen
+    let _ = restore();
     Ok(if std::env::var("NONAME_MOCK").is_ok() { String::new() } else { a.session_id() })
+}
+
+/// Session id for the exit message, also when noname is ended by a signal.
+static SID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Signal handler (ctrl+c as a real SIGINT, SIGTERM, terminal closed): restore the
+/// terminal first, otherwise mouse tracking stays on and the shell fills with mouse codes.
+fn bye() {
+    // hold stdout until the process exits, so the drawing loop cannot paint over the shell
+    let o = io::stdout();
+    let _g = o.lock();
+    let _ = restore();
+    if let Ok(s) = SID.lock() {
+        if !s.is_empty() {
+            println!("resume this session:  noname -r {s}");
+        }
+    }
+    live::killall();
 }
 
 fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
