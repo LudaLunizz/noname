@@ -1007,6 +1007,28 @@ impl App {
                         }
                         t.tools = e["usage"]["tool_uses"].as_u64().unwrap_or(t.tools);
                         t.toks = e["usage"]["total_tokens"].as_u64().unwrap_or(t.toks);
+                        let mut ph = String::new();
+                        for r in e["workflow_progress"].as_array().map(|v| v.as_slice()).unwrap_or(&[]) {
+                            if r["type"] != "workflow_agent" {
+                                continue;
+                            }
+                            let ix = r["index"].as_u64().unwrap_or(0);
+                            let n = match r["state"].as_str().unwrap_or("") {
+                                "done" => 1,
+                                "error" => 2,
+                                _ => 0,
+                            };
+                            if n == 0 {
+                                ph = sv(r, "phaseTitle");
+                            }
+                            match t.wf.iter_mut().find(|x| x.0 == ix) {
+                                Some(x) => x.1 = x.1.max(n),
+                                None => t.wf.push((ix, n)),
+                            }
+                        }
+                        if !ph.is_empty() {
+                            t.phase = one(&ph, 80);
+                        }
                     }
                 }
                 "task_updated" | "task_notification" => {

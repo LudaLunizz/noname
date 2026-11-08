@@ -324,6 +324,10 @@ pub struct Task {
     pub toks: u64,
     pub out: String,
     pub acts: Vec<String>,
+    /// workflow agents seen in workflow_progress: (index, 0 running/queued, 1 done, 2 error)
+    pub wf: Vec<(u64, u8)>,
+    /// phase of the newest running workflow agent
+    pub phase: String,
 }
 
 pub const TKIND: [(&str, &str, &str); 4] = [("$", "shell", "shells"), ("~", "monitor", "monitors"), ("&", "agent", "agents"), ("%", "workflow", "workflows")];
