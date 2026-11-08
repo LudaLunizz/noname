@@ -1,4 +1,5 @@
 pub mod bg;
+pub mod img;
 pub mod sys;
 pub mod upd;
 mod codex;
@@ -274,6 +275,7 @@ pub struct App {
     pub ups: String,
     pub upf: bool,
     le: u64,
+    pub imgs: Vec<(&'static str, Vec<u8>)>,
 }
 
 fn tl(k: Tk, a: &str, sum: &str, body: Vec<Ln>) -> Tool {
@@ -461,6 +463,7 @@ impl App {
             ups: String::new(),
             upf: false,
             le: 0,
+            imgs: vec![],
             tf: false,
         }
     }
@@ -941,6 +944,154 @@ impl App {
         self.inp.chars().count()
     }
 
+    fn tokl(&self) -> Option<usize> {
+        let cs: Vec<char> = self.inp.chars().take(self.cur).collect();
+        tokend(&cs)
+    }
+
+    fn wl(&self) -> usize {
+        if let Some(o) = self.tokl() {
+            return o;
+        }
+        let cs: Vec<char> = self.inp.chars().collect();
+        let mut j = self.cur;
+        while j > 0 && cs[j - 1].is_whitespace() {
+            j -= 1
+        }
+        if let Some(o) = tokend(&cs[..j]) {
+            return o;
+        }
+        let w = |c: char| c.is_alphanumeric() || c == '_';
+        if j > 0 && w(cs[j - 1]) {
+            while j > 0 && w(cs[j - 1]) {
+                j -= 1
+            }
+        } else {
+            while j > 0 && !w(cs[j - 1]) && !cs[j - 1].is_whitespace() {
+                j -= 1
+            }
+        }
+        j
+    }
+
+    fn wr(&self) -> usize {
+        let cs: Vec<char> = self.inp.chars().collect();
+        let n = cs.len();
+        let mut j = self.cur;
+        while j < n && cs[j].is_whitespace() {
+            j += 1
+        }
+        let rest: String = cs[j..].iter().collect();
+        if let Some((_, l)) = imgtok(&rest) {
+            return j + l;
+        }
+        let w = |c: char| c.is_alphanumeric() || c == '_';
+        if j < n && w(cs[j]) {
+            while j < n && w(cs[j]) {
+                j += 1
+            }
+        } else {
+            while j < n && !w(cs[j]) && !cs[j].is_whitespace() {
+                j += 1
+            }
+        }
+        j
+    }
+
+    fn cut(&mut self, a: usize, b: usize) {
+        let (a, b) = (a.min(b), a.max(b));
+        let cs: Vec<char> = self.inp.chars().collect();
+        self.inp = cs[..a].iter().chain(cs[b..].iter()).collect();
+        self.cur = a;
+        self.sug = None;
+        self.ms = 0;
+    }
+
+    fn put(&mut self, t: &str) {
+        for c in t.chars() {
+            self.ins(c)
+        }
+    }
+
+    pub fn attach(&mut self, b: Vec<u8>) -> bool {
+        match img::shrink(b) {
+            Ok((b, m)) => {
+                self.imgs.push((m, b));
+                let pre = self.inp.chars().nth(self.cur.wrapping_sub(1)).is_some_and(|c| !c.is_whitespace());
+                let t = format!("{}[image #{}] ", if pre { " " } else { "" }, self.imgs.len());
+                self.put(&t);
+                true
+            }
+            Err(0) => {
+                self.toast("not an image");
+                false
+            }
+            Err(n) => {
+                self.toast(format!("image too large  {:.1} MB", n as f32 / 1e6));
+                false
+            }
+        }
+    }
+
+    fn files(&mut self, v: Vec<std::path::PathBuf>) {
+        for p in v {
+            match std::fs::read(&p) {
+                Ok(b) => {
+                    self.attach(b);
+                }
+                Err(_) => self.toast(format!("cannot read {}", p.display())),
+            }
+        }
+    }
+
+    pub fn paste(&mut self, s: String) {
+        let v = img::paths(&s);
+        if !v.is_empty() {
+            self.files(v);
+            return;
+        }
+        let s = s.replace("\r\n", "\n").replace('\r', "\n");
+        if self.rs.is_some() {
+            self.rq.push_str(s.lines().next().unwrap_or(""));
+            return;
+        }
+        self.put(&s);
+    }
+
+    fn clipv(&mut self) {
+        match img::clip() {
+            img::Clip::Img(b) => {
+                self.attach(b);
+            }
+            img::Clip::Files(v) => self.files(v),
+            img::Clip::Text(t) => self.paste(t),
+            img::Clip::Empty => self.toast("clipboard is empty"),
+        }
+    }
+
+    pub fn content(&self, s: &str) -> Option<Vec<(&'static str, &[u8])>> {
+        let mut seen = vec![];
+        let cs: Vec<char> = s.chars().collect();
+        let mut i = 0;
+        while i < cs.len() {
+            if cs[i] == '[' {
+                let t: String = cs[i..].iter().collect();
+                if let Some((k, l)) = imgtok(&t) {
+                    if k >= 1 && k <= self.imgs.len() && !seen.contains(&k) {
+                        seen.push(k);
+                    }
+                    i += l;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        if seen.is_empty() {
+            return None;
+        }
+        Some(seen.into_iter().map(|k| (self.imgs[k - 1].0, self.imgs[k - 1].1.as_slice())).collect())
+    }
+
     pub fn rhits(&self) -> Vec<(String, String, String)> {
         let Some((v, _)) = &self.rs else { return vec![] };
         let q = self.rq.to_lowercase();
@@ -1170,6 +1321,31 @@ impl App {
                 self.inp.drain(..i);
                 self.cur = 0
             }
+            KeyCode::Char('v') if ct => self.clipv(),
+            KeyCode::Backspace if k.modifiers.intersects(Km::CONTROL | Km::ALT) => {
+                let j = self.wl();
+                self.cut(j, self.cur)
+            }
+            KeyCode::Char('h') if ct => {
+                let j = self.wl();
+                self.cut(j, self.cur)
+            }
+            KeyCode::Delete if k.modifiers.intersects(Km::CONTROL | Km::ALT) => {
+                let j = self.wr();
+                self.cut(self.cur, j)
+            }
+            KeyCode::Char('d') if k.modifiers.contains(Km::ALT) => {
+                let j = self.wr();
+                self.cut(self.cur, j)
+            }
+            KeyCode::Char('k') if ct => {
+                let n = self.nch();
+                self.cut(self.cur, n)
+            }
+            KeyCode::Left if k.modifiers.intersects(Km::CONTROL | Km::ALT) => self.cur = self.wl(),
+            KeyCode::Right if k.modifiers.intersects(Km::CONTROL | Km::ALT) => self.cur = self.wr(),
+            KeyCode::Char('b') if k.modifiers.contains(Km::ALT) => self.cur = self.wl(),
+            KeyCode::Char('f') if k.modifiers.contains(Km::ALT) => self.cur = self.wr(),
             KeyCode::Char('w') if ct => {
                 let cs: Vec<char> = self.inp.chars().collect();
                 let mut j = self.cur;
@@ -1190,6 +1366,10 @@ impl App {
                 self.toast(format!("mode  {}", MODES[self.mode]))
             }
             KeyCode::Char(c) if !ct => self.ins(c),
+            KeyCode::Backspace if self.tokl().is_some() => {
+                let j = self.tokl().unwrap_or(self.cur);
+                self.cut(j, self.cur)
+            }
             KeyCode::Backspace => {
                 self.ms = 0;
                 if self.cur > 0 {
@@ -1241,6 +1421,48 @@ impl App {
     pub fn tools(&self) -> Vec<usize> {
         self.bs.iter().enumerate().filter(|(_, b)| matches!(b, B::Tl(_))).map(|(i, _)| i).collect()
     }
+}
+
+fn tokend(cs: &[char]) -> Option<usize> {
+    if cs.last() != Some(&']') {
+        return None;
+    }
+    let o = cs.iter().rposition(|&c| c == '[')?;
+    let t: String = cs[o..].iter().collect();
+    imgtok(&t).filter(|&(_, l)| l == t.chars().count()).map(|_| o)
+}
+
+pub fn imgtok(s: &str) -> Option<(usize, usize)> {
+    let r = s.strip_prefix("[image #")?;
+    let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if d.is_empty() || !r[d.len()..].starts_with(']') {
+        return None;
+    }
+    Some((d.parse().ok()?, 9 + d.len()))
+}
+
+pub fn imgspans(s: &str, base: Style, hi: Style) -> Vec<Span<'static>> {
+    let mut v = vec![];
+    let mut cur = String::new();
+    let mut rest = s;
+    while !rest.is_empty() {
+        if let Some((_, l)) = imgtok(rest) {
+            if !cur.is_empty() {
+                v.push(Span::styled(std::mem::take(&mut cur), base));
+            }
+            let b: usize = rest.chars().take(l).map(char::len_utf8).sum();
+            v.push(Span::styled(rest[..b].to_string(), hi));
+            rest = &rest[b..];
+        } else {
+            let c = rest.chars().next().unwrap();
+            cur.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    if !cur.is_empty() {
+        v.push(Span::styled(cur, base));
+    }
+    v
 }
 
 pub fn wrap(s: &str, w: usize) -> Vec<String> {
@@ -1584,6 +1806,7 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let _ = write!(out, "\x1b[22;0t");
     let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |p| {
         let _ = restore();
@@ -1641,6 +1864,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                         a.key(k)
                     }
                 }
+                Event::Paste(s) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => a.paste(s),
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => a.scr = (a.scr + 3).min(a.smax.get()),
                     MouseEventKind::ScrollDown => a.scr = a.scr.saturating_sub(3),
@@ -1698,6 +1922,7 @@ fn ttl(a: &App) -> String {
 fn restore() -> io::Result<()> {
     let mut o = io::stdout();
     let _ = execute!(o, PopKeyboardEnhancementFlags);
+    let _ = execute!(o, ratatui::crossterm::event::DisableBracketedPaste);
     let _ = write!(o, "\x1b[23;0t");
     disable_raw_mode()?;
     execute!(o, LeaveAlternateScreen, DisableMouseCapture, ratatui::crossterm::cursor::Show)?;

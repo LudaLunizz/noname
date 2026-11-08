@@ -415,7 +415,15 @@ impl App {
         }
         self.busy = true;
         self.sb = None;
-        self.send(json!({"type": "user", "message": {"role": "user", "content": s}}));
+        let c = match self.content(&s) {
+            Some(v) => {
+                let mut c: Vec<Value> = v.into_iter().map(|(m, b)| json!({"type": "image", "source": {"type": "base64", "media_type": m, "data": crate::img::b64(b)}})).collect();
+                c.push(json!({"type": "text", "text": s}));
+                Value::Array(c)
+            }
+            None => Value::String(s),
+        };
+        self.send(json!({"type": "user", "message": {"role": "user", "content": c}}));
     }
 
     pub(crate) fn lcmd(&mut self, r: &str) {

@@ -109,6 +109,7 @@ impl App {
         self.busy = true;
         let mode = self.mode;
         let t = self.t;
+        let imgs: Vec<(&'static str, Vec<u8>)> = self.content(&s).unwrap_or_default().into_iter().map(|(m, b)| (m, b.to_vec())).collect();
         let Some(c) = &mut self.cx else { return };
         let mut cmd = Command::new(crate::sys::bin("codex"));
         cmd.arg("exec");
@@ -129,6 +130,12 @@ impl App {
             }
         }
         cmd.args(&c.args);
+        for (k, (m, b)) in imgs.iter().enumerate() {
+            let f = std::env::temp_dir().join(format!("noname-{}-{t}-{k}.{}", std::process::id(), crate::img::ext(m)));
+            if std::fs::write(&f, b).is_ok() {
+                cmd.arg("-i").arg(f);
+            }
+        }
         match (&c.tid, c.last) {
             (Some(id), _) => {
                 cmd.arg(id);

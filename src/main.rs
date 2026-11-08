@@ -134,18 +134,134 @@ fn pad(n: usize) -> Span<'static> {
     Span::raw(" ".repeat(n))
 }
 
+fn hid(a: &App, i: usize, b: &B) -> bool {
+    match b {
+        B::Th(s) => s.trim().is_empty() && a.streaming() != Some(i),
+        B::Ask(k) => matches!(k.ans, Some('y') | Some('a')),
+        B::Tl(t) => t.nm == "askuserquestion",
+        _ => false,
+    }
+}
+
+fn gok(b: &B) -> bool {
+    matches!(b, B::Tl(t) if matches!(t.k, Tk::Read | Tk::Bash | Tk::Grep | Tk::Web | Tk::Oth) && t.st != St::Err && t.nm != "askuserquestion")
+}
+
+fn groups(a: &App) -> Vec<Option<(usize, Vec<usize>)>> {
+    let n = a.bs.len();
+    let mut g: Vec<Option<(usize, Vec<usize>)>> = (0..n).map(|_| None).collect();
+    if a.open {
+        return g;
+    }
+    let mut i = 0;
+    while i < n {
+        if !gok(&a.bs[i]) {
+            i += 1;
+            continue;
+        }
+        let mut m = vec![i];
+        let mut j = i + 1;
+        while j < n {
+            if gok(&a.bs[j]) {
+                m.push(j);
+            } else if !hid(a, j, &a.bs[j]) {
+                break;
+            }
+            j += 1;
+        }
+        if m.len() >= 2 {
+            for &x in &m {
+                g[x] = Some((i, vec![]));
+            }
+            g[i] = Some((i, m));
+        }
+        i = j;
+    }
+    g
+}
+
+fn gline(a: &App, ix: &[usize], w: usize) -> Vec<Line<'static>> {
+    let ts: Vec<&noname::Tool> = ix.iter().filter_map(|&i| if let B::Tl(t) = &a.bs[i] { Some(t) } else { None }).collect();
+    let run = ts.iter().any(|t| t.st == St::Run);
+    let cnt = |k: Tk| ts.iter().filter(|t| t.k == k).count();
+    let mut rd: Vec<&str> = ts.iter().filter(|t| t.k == Tk::Read).map(|t| t.a.as_str()).collect();
+    rd.sort();
+    rd.dedup();
+    let parts: [(usize, [&str; 2], &str, &str); 5] = [
+        (cnt(Tk::Bash), ["ran", "running"], "command", "commands"),
+        (rd.len(), ["read", "reading"], "file", "files"),
+        (cnt(Tk::Grep), ["searched for", "searching for"], "pattern", "patterns"),
+        (cnt(Tk::Web), ["fetched", "fetching"], "page", "pages"),
+        (cnt(Tk::Oth), ["called", "calling"], "tool", "tools"),
+    ];
+    let sd = ix[0] as u64 * 7 + 3;
+    let mut l = vec![pad(2)];
+    if run {
+        l.extend(noise(1, a.t, sd, &gd()));
+    } else {
+        let (c, col) = sy(ts.last().map(|t| t.k).unwrap_or(Tk::Oth));
+        l.push(Span::styled(c, st(col).bold()));
+    }
+    l.push(pad(1));
+    let mut first = true;
+    for (n, vb, one, many) in parts {
+        if n == 0 {
+            continue;
+        }
+        if !first {
+            l.push(Span::styled(", ", st(MU())));
+        }
+        let v = vb[run as usize];
+        let v = if first { format!("{}{}", v[..1].to_uppercase(), &v[1..]) } else { v.to_string() };
+        first = false;
+        l.push(Span::styled(format!("{v} "), st(MU())));
+        l.push(Span::styled(n.to_string(), st(FG()).bold()));
+        l.push(Span::styled(format!(" {}", if n == 1 { one } else { many }), st(MU())));
+    }
+    let t0 = ts.iter().map(|t| t.t0).filter(|&x| x > 0).min().unwrap_or(0);
+    let r = if run {
+        let mut r = noise(6, a.t, sd + 1, &gd());
+        r.push(Span::styled(format!("  {:.1}s", a.t.saturating_sub(t0) as f32 / 30.0), st(FA())));
+        r
+    } else {
+        vec![]
+    };
+    let mut v = vec![lr(l, r, w)];
+    if run {
+        if let Some(t) = ts.iter().rev().find(|t| t.st == St::Run) {
+            let (c, _) = sy(t.k);
+            let mut s = t.a.clone();
+            let mx = w.saturating_sub(10);
+            if s.chars().count() > mx {
+                s = s.chars().take(mx.saturating_sub(1)).collect::<String>() + "~";
+            }
+            v.push(Line::from(vec![pad(4), Span::styled(format!("{c} "), st(FA())), Span::styled(s, st(FA()))]));
+        }
+    }
+    v
+}
+
 fn body(a: &App, w: usize) -> Vec<Line<'static>> {
     let m = mdt();
     let mut v: Vec<Line<'static>> = vec![];
     let mut pk = 0u8;
     let lu = a.bs.iter().rposition(|b| matches!(b, B::U(..)));
     let fly = a.ts > 0 && a.hist.last().is_some_and(|h| !h.starts_with('/'));
+    let gs = groups(a);
     for (i, b) in a.bs.iter().enumerate() {
-        match b {
-            B::Th(s) if s.trim().is_empty() && a.streaming() != Some(i) => continue,
-            B::Ask(k) if matches!(k.ans, Some('y') | Some('a')) => continue,
-            B::Tl(t) if t.nm == "askuserquestion" => continue,
-            _ => {}
+        if hid(a, i, b) {
+            continue;
+        }
+        if let Some((s0, ix)) = &gs[i] {
+            if *s0 != i {
+                continue;
+            }
+            if !v.is_empty() && pk != 4 {
+                v.push(Line::default());
+            }
+            pk = 4;
+            v.extend(gline(a, ix, w));
+            continue;
         }
         let k = match b {
             B::U(..) => 1,
@@ -690,7 +806,7 @@ impl V for V1 {
                     }
                 }
             } else {
-                sp.push(Span::styled(l.clone(), st(WH())));
+                sp.extend(imgspans(l, st(WH()), st(PE()).bold()));
             }
             if j == 0 {
                 if let Some((rest, _)) = &gh {
