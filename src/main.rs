@@ -594,7 +594,7 @@ impl V for V1 {
             _ => {}
         }
         if s == "tasks" || s == "taskd" {
-            let mk = |kind: u8, desc: &str, st: u8, t0: u64, t1: u64, tools: u64, toks: u64, out: &str, acts: &[&str]| Task { id: desc.into(), kind, desc: desc.into(), st, t0, t1, tool: String::new(), last: acts.last().map(|x| x.to_string()).unwrap_or_default(), tools, toks, out: out.into(), acts: acts.iter().map(|x| x.to_string()).collect() };
+            let mk = |kind: u8, desc: &str, st: u8, t0: u64, t1: u64, tools: u64, toks: u64, out: &str, acts: &[&str]| Task { id: desc.into(), kind, desc: desc.into(), st, t0, t1, tool: String::new(), last: acts.last().map(|x| x.to_string()).unwrap_or_default(), tools, toks, out: out.into(), acts: acts.iter().map(|x| x.to_string()).collect(), ..Default::default() };
             a.tasks = vec![
                 mk(0, "cargo watch -x test", 0, 1, 0, 0, 0, "running 14 tests\ntest feed::tick ... ok\ntest swipe::snap ... ok\ntest result: ok. 14 passed", &[]),
                 mk(1, "tail -f logs/app.log | grep ERROR", 0, 1, 0, 0, 0, "", &[]),
@@ -603,6 +603,16 @@ impl V for V1 {
             ];
             a.t = a.t.max(900);
             a.tk = Some((if s == "taskd" { 0 } else { 2 }, s == "taskd"));
+        }
+        if s == "agents" {
+            let ag = |desc: &str, st: u8, t0: u64, tools: u64, toks: u64, last: &str| Task { id: desc.into(), kind: 2, desc: desc.into(), st, t0, t1: if st == 0 { 0 } else { t0 + 300 }, last: last.into(), tools, toks, ..Default::default() };
+            a.tasks = vec![
+                ag("research: VTE clipboard support", 1, 10, 9, 21400, "read vte docs"),
+                ag("research: OSC 8 hyperlinks", 0, 10, 6, 15800, "WebFetch gitlab.gnome.org/GNOME/vte"),
+                ag("research: wl-clipboard on GNOME", 0, 12, 3, 7100, "WebSearch wl-copy mutter data-control"),
+                Task { id: "wf".into(), kind: 3, desc: "review-changes".into(), st: 0, t0: 20, wf: vec![(1, 1), (2, 1), (3, 0), (4, 0), (5, 0)], phase: "Verify".into(), tools: 31, toks: 88200, ..Default::default() },
+            ];
+            a.t = a.t.max(900);
         }
         if s == "slash" {
             a.inp = "/co".into();
@@ -630,6 +640,9 @@ impl V for V1 {
             if !b.done() {
                 tail_nz(&mut bt, a, 77);
             }
+        }
+        if a.tk.is_none() {
+            agents(&mut bt, a, w);
         }
         let bwh = bt.len() as u16;
         if let Some((sel, opt)) = a.rw {
@@ -1247,6 +1260,74 @@ fn join(v: &[Ch], us: &[Vec<Span<'static>>], mode: u8) -> Vec<Span<'static>> {
         o.extend(part);
     }
     o
+}
+
+/// `████░░░░ 45%`
+fn pbar(done: usize, tot: usize, bw: usize) -> Vec<Span<'static>> {
+    let f = if tot == 0 { 0.0 } else { done as f32 / tot as f32 };
+    let k = ((f * bw as f32).round() as usize).min(bw);
+    vec![Span::styled("█".repeat(k), st(LI())), Span::styled("░".repeat(bw - k), st(FA())), Span::styled(format!(" {:>3}%", (f * 100.0).round() as u32), st(FG()).bold())]
+}
+
+/// Running background tasks under the prompt, like Claude Code shows them: one line per
+/// task, the last activity under it, and a progress bar for workflows and agent batches.
+fn agents(bt: &mut Vec<Line<'static>>, a: &App, w: usize) {
+    let run: Vec<&Task> = a.tasks.iter().filter(|t| t.st == 0).collect();
+    if run.is_empty() {
+        return;
+    }
+    let cut = |s: &str, n: usize| -> String { if s.chars().count() > n { s.chars().take(n.saturating_sub(1)).collect::<String>() + "…" } else { s.to_string() } };
+    let show = 4;
+    for (j, t) in run.iter().take(show).enumerate() {
+        let (sym, kn, _) = TKIND[t.kind as usize];
+        let mut m = vec![];
+        if t.tools > 0 {
+            m.push(format!("{} tools", t.tools));
+        }
+        if t.toks > 0 {
+            m.push(format!("{:.1}k tok", t.toks as f32 / 1000.0));
+        }
+        let sx = dur(a.t.saturating_sub(t.t0) as f32 / 30.0);
+        let rt = if m.is_empty() { sx.clone() } else { format!("{}   {sx}", m.join(" · ")) };
+        let d = cut(&t.desc, w.saturating_sub(rt.chars().count() + 16));
+        let l = vec![
+            pad(2),
+            Span::styled(sym, st(grad(&[LI(), CY()], pulse(a.t + j as u64 * 9, 45.0))).bold()),
+            Span::styled(format!(" {kn:<9}"), st(MU())),
+            Span::styled(d, st(FG())),
+        ];
+        let mut rr = vec![];
+        if !m.is_empty() {
+            rr.push(Span::styled(format!("{}   ", m.join(" · ")), st(FA())));
+        }
+        rr.push(Span::styled(sx, st(CY())));
+        bt.push(lr(l, rr, w));
+        if t.kind == 3 && !t.wf.is_empty() {
+            let done = t.wf.iter().filter(|x| x.1 != 0).count();
+            let mut l = vec![pad(14)];
+            if !t.phase.is_empty() {
+                l.push(Span::styled(format!("{}  ", cut(&t.phase, 30)), st(MU())));
+            }
+            l.extend(pbar(done, t.wf.len(), 20));
+            l.push(Span::styled(format!("  {done}/{} agents", t.wf.len()), st(FA())));
+            bt.push(Line::from(l));
+        } else if !t.last.is_empty() {
+            let s = t.last.lines().next().unwrap_or("");
+            bt.push(Line::from(vec![pad(14), Span::styled(cut(s, w.saturating_sub(16)), st(FA()))]));
+        }
+    }
+    // agents started together count as one batch: from the oldest running agent on
+    let t0 = run.iter().filter(|t| t.kind == 2).map(|t| t.t0).min();
+    let batch: Vec<&Task> = t0.map(|t0| a.tasks.iter().filter(|t| t.kind == 2 && t.t0 >= t0).collect()).unwrap_or_default();
+    if batch.len() >= 2 {
+        let done = batch.iter().filter(|t| t.st != 0).count();
+        let mut l = vec![pad(2), Span::styled("agents      ", st(MU()))];
+        l.extend(pbar(done, batch.len(), 20));
+        l.push(Span::styled(format!("  {done}/{} done", batch.len()), st(FA())));
+        bt.push(Line::from(l));
+    }
+    let more = if run.len() > show { format!("+{} more  ·  ", run.len() - show) } else { String::new() };
+    bt.push(Line::from(vec![pad(2), Span::styled(format!("{more}↓ to manage"), st(FA()))]));
 }
 
 fn dur(s: f32) -> String {
