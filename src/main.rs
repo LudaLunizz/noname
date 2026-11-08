@@ -897,7 +897,15 @@ impl V for V1 {
         }
         let cwd = vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))];
         let mut rows: [[Vec<Ch>; 3]; 2] = Default::default();
-        rows[0][0].push(Ch::S(cwd));
+        match lay(5) {
+            0 => rows[0][0].push(Ch::S(cwd)),
+            1 => rows[0][1].push(Ch::S(cwd)),
+            2 => rows[0][2].insert(0, Ch::S(cwd)),
+            3 => rows[1][0].push(Ch::S(cwd)),
+            4 => rows[1][1].push(Ch::S(cwd)),
+            5 => rows[1][2].push(Ch::S(cwd)),
+            _ => {}
+        }
         if !toast.is_empty() {
             rows[1][2].push(Ch::S(toast));
         }

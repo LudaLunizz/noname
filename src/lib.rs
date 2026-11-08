@@ -823,6 +823,7 @@ impl App {
             ("model", LAYOUT[2].1[lay(2)].into()),
             ("title", LAYOUT[3].1[lay(3)].into()),
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
+            ("location", LAYOUT[5].1[lay(5)].into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -1168,7 +1169,7 @@ impl App {
                 KeyCode::Esc => self.ns = None,
                 KeyCode::Up => self.ns = Some(sel.saturating_sub(1)),
                 KeyCode::Down => self.ns = Some((sel + 1).min(n - 1)),
-                KeyCode::Left if (7..=11).contains(&sel) => {
+                KeyCode::Left if (7..=12).contains(&sel) => {
                     let j = sel - 7;
                     let n = LAYOUT[j].1.len();
                     setlay(j, (lay(j) + n - 1) % n);
@@ -1198,7 +1199,7 @@ impl App {
                         setbar(j, on);
                         self.toast(format!("{}  {}", BARS[j], if on { "on" } else { "off" }));
                     }
-                    7..=11 => {
+                    7..=12 => {
                         let j = sel - 7;
                         let n = LAYOUT[j].1.len();
                         setlay(j, (lay(j) + 1) % n);
@@ -1942,14 +1943,15 @@ pub fn setbar(i: usize, on: bool) {
     let _ = std::fs::write(&f, hid.join(","));
 }
 
-pub const LAYOUT: [(&str, &[&str]); 5] = [
+pub const LAYOUT: [(&str, &[&str]); 6] = [
     ("input", &["bottom", "top"]),
     ("usage", &["bottom left", "bottom right", "top left", "top right", "off"]),
     ("model", &["top", "bottom", "off"]),
     ("title", &["middle", "top left", "top center", "top right", "bottom right"]),
     ("title visibility", &["on start", "always", "off"]),
+    ("location", &["top left", "top center", "top right", "bottom left", "bottom center", "bottom right", "off"]),
 ];
-static LSET: [std::sync::atomic::AtomicU8; 5] = [const { std::sync::atomic::AtomicU8::new(u8::MAX) }; 5];
+static LSET: [std::sync::atomic::AtomicU8; 6] = [const { std::sync::atomic::AtomicU8::new(u8::MAX) }; 6];
 
 fn layload() -> Vec<(String, String)> {
     std::fs::read_to_string(sys::cfgfile("layout")).unwrap_or_default().lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect()
