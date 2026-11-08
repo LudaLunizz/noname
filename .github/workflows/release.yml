@@ -94,17 +94,25 @@ jobs:
           tar -C dist -czf dist/packaging.tar.gz packaging
       - name: update tap and bucket
         env:
-          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-        if: env.TAP_TOKEN != ''
+          TAP_KEY: ${{ secrets.TAP_KEY }}
+          BUCKET_KEY: ${{ secrets.BUCKET_KEY }}
+        if: env.TAP_KEY != '' && env.BUCKET_KEY != ''
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for r in homebrew-noname:homebrew/noname.rb:Formula scoop-noname:scoop/noname.json:bucket; do
-            IFS=: read -r repo file dir <<< "$r"
-            git clone -q "https://x-access-token:$TAP_TOKEN@github.com/Silvertree2010/$repo.git" "/tmp/$repo"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$TAP_KEY" > ~/.ssh/tap && printf '%s\n' "$BUCKET_KEY" > ~/.ssh/bucket && chmod 600 ~/.ssh/tap ~/.ssh/bucket
+          for r in homebrew-noname:tap:homebrew/noname.rb:Formula scoop-noname:bucket:scoop/noname.json:bucket; do
+            IFS=: read -r repo key file dir <<< "$r"
+            export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/$key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+            git clone -q "git@github.com:Silvertree2010/$repo.git" "/tmp/$repo"
             cp "dist/packaging/$file" "/tmp/$repo/$dir/"
-            git -C "/tmp/$repo" commit -qam "noname $TAG" && git -C "/tmp/$repo" push -q || true
+            if ! git -C "/tmp/$repo" diff --quiet; then
+              git -C "/tmp/$repo" commit -qam "noname $TAG"
+              git -C "/tmp/$repo" push -q
+            fi
           done
+          rm -f ~/.ssh/tap ~/.ssh/bucket
       - name: clean up
         run: rm -rf dist/packaging
       - name: publish
