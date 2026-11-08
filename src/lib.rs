@@ -2179,14 +2179,22 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
     let r = lp(&mut term, &mut v);
     restore()?;
-    if let Err(e) = &r {
-        eprintln!("noname: {e}");
-        std::process::exit(1);
+    match r {
+        Err(e) => {
+            eprintln!("noname: {e}");
+            std::process::exit(1);
+        }
+        Ok(sid) => {
+            if !sid.is_empty() {
+                println!("resume this session:  noname -r {sid}");
+            }
+            Ok(())
+        }
     }
-    r
 }
 
-fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<()> {
+/// Runs the UI; returns the Claude session id (empty when there is none) so it can be shown after exit.
+fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cx = args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
     let args: Vec<String> = args.into_iter().filter(|x| x != "--codex").collect();
@@ -2306,7 +2314,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         }
         a.step();
     }
-    Ok(())
+    Ok(if std::env::var("NONAME_MOCK").is_ok() { String::new() } else { a.session_id() })
 }
 
 fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {

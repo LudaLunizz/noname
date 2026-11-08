@@ -252,6 +252,11 @@ fn strip(s: &str) -> String {
 }
 
 impl App {
+    /// The Claude session id, empty until claude reports it.
+    pub(crate) fn session_id(&self) -> String {
+        self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default()
+    }
+
     fn subact(&mut self, p: &str, line: String) {
         if let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(p).copied()) {
             if let Some(B::Tl(t)) = self.bs.get_mut(i) {
