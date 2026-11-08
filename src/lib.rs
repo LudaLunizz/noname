@@ -818,7 +818,11 @@ impl App {
             ("context bar", if bars()[0] { "on" } else { "off" }.into()),
             ("5h bar", if bars()[1] { "on" } else { "off" }.into()),
             ("week bar", if bars()[2] { "on" } else { "off" }.into()),
-            ("title", if title() { "on" } else { "off" }.into()),
+            ("input", LAYOUT[0].1[lay(0)].into()),
+            ("usage", LAYOUT[1].1[lay(1)].into()),
+            ("model", LAYOUT[2].1[lay(2)].into()),
+            ("title", LAYOUT[3].1[lay(3)].into()),
+            ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -1164,6 +1168,11 @@ impl App {
                 KeyCode::Esc => self.ns = None,
                 KeyCode::Up => self.ns = Some(sel.saturating_sub(1)),
                 KeyCode::Down => self.ns = Some((sel + 1).min(n - 1)),
+                KeyCode::Left if (7..=11).contains(&sel) => {
+                    let j = sel - 7;
+                    let n = LAYOUT[j].1.len();
+                    setlay(j, (lay(j) + n - 1) % n);
+                }
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
                     0 if upd::managed().is_some() => {}
                     0 => {
@@ -1189,10 +1198,10 @@ impl App {
                         setbar(j, on);
                         self.toast(format!("{}  {}", BARS[j], if on { "on" } else { "off" }));
                     }
-                    7 => {
-                        let on = !title();
-                        settitle(on);
-                        self.toast(format!("title  {}", if on { "on" } else { "off" }));
+                    7..=11 => {
+                        let j = sel - 7;
+                        let n = LAYOUT[j].1.len();
+                        setlay(j, (lay(j) + 1) % n);
                     }
                     _ => self.upcheck(true),
                 },
@@ -1933,25 +1942,39 @@ pub fn setbar(i: usize, on: bool) {
     let _ = std::fs::write(&f, hid.join(","));
 }
 
-static TSET: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+pub const LAYOUT: [(&str, &[&str]); 5] = [
+    ("input", &["bottom", "top"]),
+    ("usage", &["bottom left", "bottom right", "top left", "top right", "off"]),
+    ("model", &["top", "bottom", "off"]),
+    ("title", &["top left", "top center", "top right", "bottom right"]),
+    ("title visibility", &["off", "on start", "always"]),
+];
+static LSET: [std::sync::atomic::AtomicU8; 5] = [const { std::sync::atomic::AtomicU8::new(u8::MAX) }; 5];
 
-pub fn title() -> bool {
-    use std::sync::atomic::Ordering::Relaxed;
-    let mut m = TSET.load(Relaxed);
-    if m == u8::MAX {
-        m = (std::fs::read_to_string(sys::cfgfile("title")).unwrap_or_default().trim() == "on") as u8;
-        TSET.store(m, Relaxed);
-    }
-    m == 1
+fn layload() -> Vec<(String, String)> {
+    std::fs::read_to_string(sys::cfgfile("layout")).unwrap_or_default().lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect()
 }
 
-pub fn settitle(on: bool) {
-    TSET.store(on as u8, std::sync::atomic::Ordering::Relaxed);
-    let f = sys::cfgfile("title");
+pub fn lay(i: usize) -> usize {
+    use std::sync::atomic::Ordering::Relaxed;
+    let m = LSET[i].load(Relaxed);
+    if m != u8::MAX {
+        return m as usize;
+    }
+    let (k, opts) = LAYOUT[i];
+    let v = layload().into_iter().find(|x| x.0 == k).and_then(|x| opts.iter().position(|o| *o == x.1)).unwrap_or(0);
+    LSET[i].store(v as u8, Relaxed);
+    v
+}
+
+pub fn setlay(i: usize, v: usize) {
+    LSET[i].store(v as u8, std::sync::atomic::Ordering::Relaxed);
+    let body: String = (0..LAYOUT.len()).map(|j| format!("{}={}\n", LAYOUT[j].0, LAYOUT[j].1[lay(j)])).collect();
+    let f = sys::cfgfile("layout");
     if let Some(d) = std::path::Path::new(&f).parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    let _ = std::fs::write(&f, if on { "on" } else { "off" });
+    let _ = std::fs::write(&f, body);
 }
 
 pub fn modefile() -> String {

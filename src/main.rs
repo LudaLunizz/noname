@@ -712,30 +712,24 @@ impl V for V1 {
         }
         let eh = extra.len() as u16;
         let h = ar.height;
-        let top = 2u16;
-        let bot = 1 + ih as u16 + bwh + 1 + 1;
-        let bh = h.saturating_sub(top + bot + eh + 1);
+        let top_in = lay(0) == 1;
+        let bh = h.saturating_sub(ih as u16 + bwh + eh + 6);
+        let (top, ey, ry, iy, bty) = if top_in {
+            let iy = 2u16;
+            let ry = iy + ih as u16;
+            let bty = ry + 1;
+            let ey = bty + bwh;
+            (ey + eh + 1, ey, ry, iy, bty)
+        } else {
+            let top = 2u16;
+            let ey = top + bh + 1;
+            let ry = ey + eh;
+            let iy = ry + 1;
+            (top, ey, ry, iy, iy + ih as u16)
+        };
+        let sy = if top_in { h.saturating_sub(1) } else { bty + bwh + 1 };
         let col = |y: u16, hh: u16| Rect { x: x0, y, width: w as u16, height: hh };
 
-        let mut hl = if title() {
-            let mut v = decode("noname", a.t / 2, a.t, 43, st(LI()).bold(), &gd());
-            v.push(pad(3));
-            v
-        } else {
-            vec![]
-        };
-        hl.extend([Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))]);
-        let hdr = lr(
-            hl,
-            {
-                let mut r = if a.work { vec![Span::styled("work  ", st(PK()).bold())] } else { vec![] };
-                r.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI()), &gd()));
-                r.push(Span::styled(if a.effs.is_empty() { String::new() } else { format!("  {}", a.effs) }, st(FA())));
-                r
-            },
-            w,
-        );
-        f.render_widget(Paragraph::new(hdr), col(0, 1));
 
         if a.bs.is_empty() {
             let lg = [
@@ -768,9 +762,7 @@ impl V for V1 {
                 f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA()))).alignment(Alignment::Right), col(top + bh - 1, 1));
             }
         }
-        let ey = top + bh + 1;
         f.render_widget(Paragraph::new(extra), col(ey, eh));
-        let ry = ey + eh;
         let rule = Span::styled("─".repeat(w), st(FA()));
         let el = a.t.saturating_sub(a.ts);
         if a.ts > 0 && el < 20 {
@@ -786,7 +778,6 @@ impl V for V1 {
         } else {
             f.render_widget(Paragraph::new(rule.clone()), col(ry, 1));
         }
-        let iy = ry + 1;
         let pc = if a.ask.is_some() || a.qa.is_some() { PK() } else { [LI(), CY(), GR(), RD()][a.mode] };
         let pg: Vec<Span<'static>> = if a.tm > 0 && a.t.saturating_sub(a.tm) < 9 {
             noise(1, a.t, 61, &gd())
@@ -837,7 +828,7 @@ impl V for V1 {
         f.render_widget(Paragraph::new(il2), col(iy, ih as u16));
         let cyy = cy - sk;
         setcur(f, a, x0 + 2 + cx as u16, iy + cyy as u16);
-        f.render_widget(Paragraph::new(bt), col(iy + ih as u16, bwh));
+        f.render_widget(Paragraph::new(bt), col(bty, bwh));
         let tg = [a.ctx, a.h5, a.d7];
         let n = a.t.saturating_sub(self.lt).min(400) as i32;
         let k = 1.0 - 0.88f32.powi(n);
@@ -856,20 +847,69 @@ impl V for V1 {
         ];
         let vis = bars();
         let shown: Vec<Vec<Span<'static>>> = segs.into_iter().enumerate().filter(|(j, _)| vis[*j]).map(|(_, x)| x).collect();
-        let mut l: Vec<Span<'static>> = vec![];
-        for (j, sg) in shown.iter().enumerate() {
-            if j > 0 {
-                l.push(pad(3));
-            }
-            l.extend(sg.clone());
-        }
-        let r = match &a.toast {
+        let toast = match &a.toast {
             Some((t, e)) if !t.starts_with("mode") => decode(t, a.t + 60 - e, a.t, 13, st(L2()), &gd()),
             _ => vec![],
         };
-        let full = sw(&l) + sw(&r) + 2 <= w;
-        let line = if full { lr(l, r, w) } else { lr(shown.first().cloned().unwrap_or_default(), r, w) };
-        f.render_widget(Paragraph::new(line), col(iy + ih as u16 + bwh + 1, 1));
+        let mut model = if a.work { vec![Span::styled("work  ", st(PK()).bold())] } else { vec![] };
+        model.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI()), &gd()));
+        if !a.effs.is_empty() {
+            model.push(Span::styled(format!("  {}", a.effs), st(FA())));
+        }
+        let tvis = match lay(4) {
+            0 => false,
+            1 => !a.bs.iter().any(|b| matches!(b, B::U(..))),
+            _ => true,
+        };
+        let ttl = decode("noname", a.t / 2, a.t, 43, st(LI()).bold(), &gd());
+        let cwd = vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))];
+        let mut rows: [[Vec<Ch>; 3]; 2] = Default::default();
+        if tvis && lay(3) == 0 {
+            rows[0][0].push(Ch::S(ttl.clone()));
+        }
+        rows[0][0].push(Ch::S(cwd));
+        if !toast.is_empty() {
+            rows[1][2].push(Ch::S(toast));
+        }
+        match lay(1) {
+            0 => rows[1][0].push(Ch::U),
+            1 => rows[1][2].push(Ch::U),
+            2 => rows[0][0].push(Ch::U),
+            3 => rows[0][2].push(Ch::U),
+            _ => {}
+        }
+        match lay(2) {
+            0 => rows[0][2].push(Ch::S(model)),
+            1 => rows[1][2].push(Ch::S(model)),
+            _ => {}
+        }
+        if tvis {
+            match lay(3) {
+                1 => rows[0][1].push(Ch::S(ttl)),
+                2 => rows[0][2].push(Ch::S(ttl)),
+                3 => rows[1][2].push(Ch::S(ttl)),
+                _ => {}
+            }
+        }
+        for (ri, y) in [(0usize, 0u16), (1, sy)] {
+            let [l, c, r] = &rows[ri];
+            let c = join(c, &shown, 2);
+            let cwn = sw(&c);
+            let mut mode = 2;
+            let (mut ls, mut rs) = (join(l, &shown, mode), join(r, &shown, mode));
+            let fits = |ls: &[Span], rs: &[Span]| if cwn > 0 { sw(ls).max(sw(rs)) * 2 + cwn + 4 <= w } else { sw(ls) + sw(rs) + 2 <= w };
+            while !fits(&ls, &rs) && mode > 0 {
+                mode -= 1;
+                ls = join(l, &shown, mode);
+                rs = join(r, &shown, mode);
+            }
+            let cok = cwn > 0 && fits(&ls, &rs);
+            f.render_widget(Paragraph::new(lr(ls, rs, w)), col(y, 1));
+            if cok {
+                let cx = x0 + (w.saturating_sub(cwn) / 2) as u16;
+                f.render_widget(Paragraph::new(Line::from(c)), Rect { x: cx, y, width: cwn as u16, height: 1 });
+            }
+        }
         if self.bg.as_ref().map(|b| b.name) != a.bgw {
             let ar = f.area();
             self.bg = a.bgw.and_then(|k| noname::bg::Bg::new(k, ar.height, ar.width).ok());
@@ -878,6 +918,40 @@ impl V for V1 {
             b.paint(f.buffer_mut(), a.t);
         }
     }
+}
+
+#[derive(Clone)]
+enum Ch {
+    S(Vec<Span<'static>>),
+    U,
+}
+
+fn join(v: &[Ch], us: &[Vec<Span<'static>>], mode: u8) -> Vec<Span<'static>> {
+    let mut o: Vec<Span<'static>> = vec![];
+    for x in v {
+        let part: Vec<Span<'static>> = match x {
+            Ch::S(s) => s.clone(),
+            Ch::U if mode == 0 => vec![],
+            Ch::U => {
+                let mut p = vec![];
+                for (j, sg) in us.iter().take(if mode == 1 { 1 } else { usize::MAX }).enumerate() {
+                    if j > 0 {
+                        p.push(pad(3));
+                    }
+                    p.extend(sg.clone());
+                }
+                p
+            }
+        };
+        if part.is_empty() || sw(&part) == 0 {
+            continue;
+        }
+        if !o.is_empty() {
+            o.push(pad(4));
+        }
+        o.extend(part);
+    }
+    o
 }
 
 fn main() -> std::io::Result<()> {
