@@ -92,6 +92,14 @@ pub mod pal {
 
 
 pub const MODELS: [&str; 4] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1"];
+/// Window opacity steps in the /noname menu, in percent.
+pub const OPAC: [u8; 8] = [100, 90, 80, 70, 60, 50, 40, 30];
+
+/// noname's window opacity setting in percent (100 = leave the terminal alone).
+pub fn opac() -> u8 {
+    std::fs::read_to_string(sys::cfgfile("opacity")).ok().and_then(|s| s.trim().parse().ok()).filter(|v| OPAC.contains(v)).unwrap_or(100)
+}
+
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 pub const MID_ALL: [(&str, &str); 4] = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1")];
 pub const MODES: [&str; 4] = ["default", "plan", "auto", "bypass"];
@@ -897,6 +905,7 @@ impl App {
             ("title", LAYOUT[3].1[lay(3)].into()),
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("location", LAYOUT[5].1[lay(5)].into()),
+            ("opacity", format!("{}%", opac())),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -915,6 +924,33 @@ impl App {
             self.lmode();
         }
         self.toast(format!("default permission  {}", MODES[i]));
+    }
+
+    /// One step more see-through (`less`) or more solid; 100% gives the terminal its own value back.
+    pub fn setopac(&mut self, less: bool) {
+        let cur = OPAC.iter().position(|x| *x == opac()).unwrap_or(0);
+        let i = if less { (cur + 1) % OPAC.len() } else { (cur + OPAC.len() - 1) % OPAC.len() };
+        let v = OPAC[i];
+        if self.lv.is_none() && self.cx.is_none() {
+            self.toast(format!("opacity  {v}%"));
+            return;
+        }
+        let ok = if v == 100 {
+            sys::opacity_back();
+            true
+        } else {
+            sys::opacity_apply(v)
+        };
+        if !ok {
+            self.toast("opacity works in Ptyxis; set it in your terminal's own settings");
+            return;
+        }
+        let f = sys::cfgfile("opacity");
+        if let Some(d) = std::path::Path::new(&f).parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&f, v.to_string());
+        self.toast(format!("opacity  {v}%"));
     }
 
     pub fn settheme(&mut self, i: usize) {
@@ -1436,6 +1472,7 @@ impl App {
                     let n = LAYOUT[j].1.len();
                     setlay(j, (lay(j) + n - 1) % n);
                 }
+                KeyCode::Left if sel == 13 => self.setopac(false),
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
                     0 if upd::managed().is_some() => {}
                     0 => {
@@ -1466,6 +1503,7 @@ impl App {
                         let n = LAYOUT[j].1.len();
                         setlay(j, (lay(j) + 1) % n);
                     }
+                    13 => self.setopac(true),
                     _ => self.upcheck(true),
                 },
                 _ => {}
@@ -2171,11 +2209,20 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |p| {
         let _ = restore();
+        sys::opacity_back();
         hook(p)
     }));
+    if std::env::var("NONAME_MOCK").is_err() {
+        if opac() < 100 {
+            sys::opacity_apply(opac());
+        } else {
+            sys::opacity_back();
+        }
+    }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
     let r = lp(&mut term, &mut v);
     restore()?;
+    sys::opacity_back();
     if let Err(e) = &r {
         eprintln!("noname: {e}");
         std::process::exit(1);
@@ -2195,7 +2242,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         App::live(args)?
     };
     let mut lt = String::new();
-    sys::on_close(live::killall);
+    sys::on_close(|| {
+        sys::opacity_back();
+        live::killall();
+    });
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
         a.upcheck(false);

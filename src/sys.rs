@@ -261,3 +261,44 @@ pub fn setclip(t: &str) {
     }
     std::thread::spawn(move || ch.wait());
 }
+
+/// gsettings path of the Ptyxis profile this tab runs in; Ptyxis applies its opacity live.
+fn ptyxis() -> Option<String> {
+    let p = std::env::var("PTYXIS_PROFILE").ok()?;
+    (!p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric()) && which("gsettings").is_some()).then(|| format!("org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{p}/"))
+}
+
+/// Window opacity of the terminal, 0.0 to 1.0, when noname can change it (Ptyxis only for now).
+pub fn term_opacity() -> Option<f32> {
+    let o = std::process::Command::new("gsettings").args(["get", &ptyxis()?, "opacity"]).stderr(std::process::Stdio::null()).output().ok()?;
+    String::from_utf8_lossy(&o.stdout).trim().parse().ok()
+}
+
+pub fn set_term_opacity(v: f32) -> bool {
+    let Some(p) = ptyxis() else { return false };
+    std::process::Command::new("gsettings").args(["set", &p, "opacity", &format!("{:.2}", v.clamp(0.0, 1.0))]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
+/// Sets the terminal to noname's opacity (percent) and notes the terminal's own value
+/// first, so `opacity_back` can put it back on exit, also after a crash on the next run.
+pub fn opacity_apply(pct: u8) -> bool {
+    let f = cfgfile("opacity-orig");
+    if std::fs::metadata(&f).is_err() {
+        let Some(cur) = term_opacity() else { return false };
+        if let Some(d) = std::path::Path::new(&f).parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&f, format!("{cur}"));
+    }
+    set_term_opacity(pct as f32 / 100.0)
+}
+
+/// Gives the terminal its own opacity back (no-op when noname never changed it).
+pub fn opacity_back() {
+    let f = cfgfile("opacity-orig");
+    if let Some(v) = std::fs::read_to_string(&f).ok().and_then(|s| s.trim().parse::<f32>().ok()) {
+        if set_term_opacity(v) {
+            let _ = std::fs::remove_file(&f);
+        }
+    }
+}
