@@ -1124,8 +1124,13 @@ impl V for V1 {
         };
         let mut model = if a.work { vec![Span::styled("work  ", st(PK()).bold())] } else { vec![] };
         model.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI()), &gd()));
-        if !a.effs.is_empty() {
-            model.push(Span::styled(format!("  {}", a.effs), st(FA())));
+        // effort sits on the usage line, on the side opposite the bars; with usage off it stays by the model
+        let eff = (!a.effs.is_empty()).then(|| vec![Span::styled(a.effs.clone(), st(FA()))]);
+        if lay(1) == 4 {
+            if let Some(e) = &eff {
+                model.push(pad(2));
+                model.extend(e.clone());
+            }
         }
         let cwd = vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))];
         let mut rows: [[Vec<Ch>; 3]; 2] = Default::default();
@@ -1175,6 +1180,15 @@ impl V for V1 {
             0 => rows[0][2].push(Ch::S(model)),
             1 => rows[1][2].push(Ch::S(model)),
             _ => {}
+        }
+        if let Some(e) = eff {
+            match lay(1) {
+                0 => rows[1][2].push(Ch::S(e)),
+                1 => rows[1][0].insert(0, Ch::S(e)),
+                2 => rows[0][2].push(Ch::S(e)),
+                3 => rows[0][0].insert(0, Ch::S(e)),
+                _ => {}
+            }
         }
         for (ri, y) in [(0usize, rt), (1, sy)] {
             let [l, c, r] = &rows[ri];
