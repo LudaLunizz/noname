@@ -976,9 +976,10 @@ impl App {
                         t if t.contains("workflow") => 3,
                         _ => 2,
                     };
+                    let name = sv(&e, "workflow_name");
                     let mut desc = sv(&e, "description");
                     if desc.is_empty() {
-                        desc = sv(&e, "workflow_name");
+                        desc = name.clone();
                     }
                     let now = self.t.max(1);
                     let tool = sv(&e, "tool_use_id");
@@ -987,7 +988,7 @@ impl App {
                             t.desc = desc;
                             t.st = 0;
                         }
-                        None => self.tasks.push(Task { id, kind, desc: one(&desc, 200), t0: now, tool, ..Default::default() }),
+                        None => self.tasks.push(Task { id, kind, desc: one(&desc, 200), t0: now, tool, name: one(&name, 60), ..Default::default() }),
                     }
                 }
                 "task_progress" => {
