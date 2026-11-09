@@ -294,29 +294,6 @@ pub fn setclip(t: &str) -> bool {
     true
 }
 
-/// Reads text from the system clipboard, if a clipboard tool is there.
-pub fn getclip() -> Option<String> {
-    let c: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
-        Some(("pbpaste", &[]))
-    } else if cfg!(windows) {
-        Some(("powershell", &["-NoProfile", "-Command", "Get-Clipboard -Raw"]))
-    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-paste").is_some() {
-        Some(("wl-paste", &["--no-newline"]))
-    } else if which("xclip").is_some() {
-        Some(("xclip", &["-selection", "clipboard", "-o"]))
-    } else {
-        None
-    };
-    let (p, a) = c?;
-    let o = Command::new(p).args(a).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
-    if !o.status.success() {
-        return None;
-    }
-    let t = String::from_utf8_lossy(&o.stdout).into_owned();
-    let t = if cfg!(windows) { t.trim_end_matches(['\r', '\n']).to_string() } else { t };
-    if t.is_empty() { None } else { Some(t) }
-}
-
 /// The Ptyxis profile id of this tab (from PTYXIS_PROFILE), when gsettings can change it.
 fn ptyxis_id() -> Option<String> {
     let p = std::env::var("PTYXIS_PROFILE").ok()?;
