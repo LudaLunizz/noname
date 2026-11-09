@@ -948,7 +948,7 @@ impl App {
         self.opacstep(less, true);
     }
 
-    /// One opacity step; `wrap` goes from 30% round to 100% (menu), without it the ends hold (ctrl+scroll).
+    /// One opacity step; `wrap` goes from 30% round to 100% (menu), without it the ends hold (alt + wheel).
     pub fn opacstep(&mut self, less: bool, wrap: bool) {
         let n = OPAC.len();
         let cur = OPAC.iter().position(|x| *x == opac()).unwrap_or(0);
@@ -2381,9 +2381,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                         // as fallback when there is no clipboard tool
                         a.clipv_any();
                     }
-                    // ctrl + wheel: up more solid, down more see-through
-                    MouseEventKind::ScrollUp if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::CONTROL) => a.opacstep(false, false),
-                    MouseEventKind::ScrollDown if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::CONTROL) => a.opacstep(true, false),
+                    // alt + wheel: up more solid, down more see-through (ctrl + wheel is the terminal's zoom)
+                    MouseEventKind::ScrollUp if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(false, false),
+                    MouseEventKind::ScrollDown if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(true, false),
                     MouseEventKind::ScrollUp => {
                         a.msel = None;
                         a.scr = (a.scr + 3).min(a.smax.get())
