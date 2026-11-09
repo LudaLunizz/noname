@@ -931,8 +931,23 @@ impl App {
 
     /// One step more see-through (`less`) or more solid; 100% gives the terminal its own value back.
     pub fn setopac(&mut self, less: bool) {
+        self.opacstep(less, true);
+    }
+
+    /// One opacity step; `wrap` goes from 30% round to 100% (menu), without it the ends hold (ctrl+scroll).
+    pub fn opacstep(&mut self, less: bool, wrap: bool) {
+        let n = OPAC.len();
         let cur = OPAC.iter().position(|x| *x == opac()).unwrap_or(0);
-        let i = if less { (cur + 1) % OPAC.len() } else { (cur + OPAC.len() - 1) % OPAC.len() };
+        let i = match (less, wrap) {
+            (true, true) => (cur + 1) % n,
+            (false, true) => (cur + n - 1) % n,
+            (true, false) => (cur + 1).min(n - 1),
+            (false, false) => cur.saturating_sub(1),
+        };
+        if i == cur {
+            self.toast(format!("opacity  {}%", OPAC[i]));
+            return;
+        }
         let v = OPAC[i];
         if self.lv.is_none() && self.cx.is_none() {
             self.toast(format!("opacity  {v}%"));
@@ -2323,6 +2338,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                             None => {}
                         }
                     }
+                    // ctrl + wheel: up more solid, down more see-through
+                    MouseEventKind::ScrollUp if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::CONTROL) => a.opacstep(false, false),
+                    MouseEventKind::ScrollDown if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::CONTROL) => a.opacstep(true, false),
                     MouseEventKind::ScrollUp => {
                         a.msel = None;
                         a.scr = (a.scr + 3).min(a.smax.get())
