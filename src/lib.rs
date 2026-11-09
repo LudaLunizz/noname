@@ -2220,6 +2220,7 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
         return dump(&mut v, &args[2..]);
     }
     enable_raw_mode()?;
+    TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let _ = write!(out, "\x1b[22;0t");
@@ -2573,14 +2574,26 @@ fn editor(s: &str) -> Option<String> {
     let _ = enable_raw_mode();
     let mut out = io::stdout();
     let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
+    // push the title again too: restore() popped it, and pops it once more on exit
+    let _ = write!(out, "\x1b[22;0t");
     let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
+    TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
     let r = if ok { std::fs::read_to_string(&f).ok() } else { None };
     let _ = std::fs::remove_file(&f);
     r
 }
 
+/// True while noname has the terminal (raw mode, alternate screen, pushed title and keys).
+static TERM_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Gives the terminal back. Runs once per take-over: a second call (end of the loop, then
+/// run(), a signal or a panic) does nothing, so the title and keyboard stacks of the
+/// shell around noname are not popped twice.
 fn restore() -> io::Result<()> {
+    if !TERM_ON.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     let mut o = io::stdout();
     let _ = execute!(o, PopKeyboardEnhancementFlags);
     let _ = execute!(o, ratatui::crossterm::event::DisableBracketedPaste);
