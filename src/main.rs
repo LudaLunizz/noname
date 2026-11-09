@@ -251,22 +251,63 @@ fn link(i: usize, x: usize, len: usize, t: &str) {
     }
 }
 
-/// Web links in a rendered line: (start column, end column, url).
-fn urls(l: &Line) -> Vec<(u16, u16, String)> {
-    let mut cs: Vec<(usize, char)> = vec![];
+/// The characters of a rendered line with their column and width.
+fn cols(l: &Line) -> Vec<(usize, char, usize)> {
+    let mut o = vec![];
     let mut x = 0;
     for sp in &l.spans {
         for c in sp.content.chars() {
-            cs.push((x, c));
-            x += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            o.push((x, c, cw));
+            x += cw;
         }
     }
-    let t: Vec<char> = cs.iter().map(|c| c.1).collect();
+    o
+}
+
+/// Web links in a rendered line: (start column, end column, url).
+#[cfg(test)]
+fn urls(l: &Line) -> Vec<(u16, u16, String)> {
+    links(std::slice::from_ref(l), 0, 1, usize::MAX).into_iter().map(|(_, xa, xb, u)| (xa, xb, u)).collect()
+}
+
+/// Web links in lines a..b of the body, as (line, start column, end column, url) pieces.
+/// The wrapper cuts a word longer than the width hard at the right edge (column `w`) and
+/// goes on at the same column on the next line, so such a cut is joined back first:
+/// a link that wraps over several lines gives one piece per line, each with the full url.
+fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, String)> {
+    // (line, column, char, width); a '\n' with line usize::MAX separates lines that are not joined
+    let mut cs: Vec<(usize, usize, char, usize)> = vec![];
+    let mut from = 0;
+    let mut nx = if a < b { cols(&bl[a]) } else { vec![] };
+    for k in a..b {
+        let cur = std::mem::take(&mut nx);
+        let st = cs.len();
+        cs.extend(cur.iter().filter(|c| c.0 >= from).map(|c| (k, c.0, c.1, c.2)));
+        from = 0;
+        if k + 1 < b {
+            nx = cols(&bl[k + 1]);
+            if let Some(&(lx, lc, lw)) = cur.last() {
+                if !lc.is_whitespace() && lx + lw == w {
+                    // the last word of this line, and where it starts
+                    let p = cs[st..].iter().rev().take_while(|c| !c.2.is_whitespace()).last().map(|c| c.1).unwrap_or(0);
+                    let cont = nx.iter().find(|c| c.0 >= p).is_some_and(|c| c.0 == p && !c.1.is_whitespace());
+                    if cont && nx.iter().take_while(|c| c.0 < p).all(|c| c.1.is_whitespace()) {
+                        from = p;
+                        continue;
+                    }
+                }
+            }
+        }
+        cs.push((usize::MAX, 0, '\n', 0));
+    }
+    let t: Vec<char> = cs.iter().map(|c| c.2).collect();
     let mut o = vec![];
     let mut i = 0;
     while i < t.len() {
-        let rest: String = t[i..t.len().min(i + 8)].iter().collect();
-        if !(rest.starts_with("https://") || rest.starts_with("http://")) || (i > 0 && t[i - 1].is_alphanumeric()) {
+        let r = &t[i..];
+        let at = r.starts_with(&['h', 't', 't', 'p', 's', ':', '/', '/']) || r.starts_with(&['h', 't', 't', 'p', ':', '/', '/']);
+        if !at || (i > 0 && t[i - 1].is_alphanumeric()) {
             i += 1;
             continue;
         }
@@ -286,8 +327,18 @@ fn urls(l: &Line) -> Vec<(u16, u16, String)> {
         }
         let u: String = t[i..e].iter().collect();
         if u.len() > 10 {
-            let xb = cs.get(e).map(|c| c.0).unwrap_or(x);
-            o.push((cs[i].0 as u16, xb as u16, u));
+            // one piece per line the url runs over
+            let mut q = i;
+            while q < e {
+                let ln = cs[q].0;
+                let mut z = q;
+                while z < e && cs[z].0 == ln {
+                    z += 1;
+                }
+                let xb = cs[z - 1].1 + cs[z - 1].3;
+                o.push((ln, cs[q].1 as u16, xb as u16, u.clone()));
+                q = z;
+            }
         }
         i = j.max(i + 1);
     }
@@ -1037,6 +1088,10 @@ impl V for V1 {
             }
             let mut scr = self.sf.round() as usize;
             let nb = bl.len();
+            // links of the visible lines, found with a margin so a wrapped link that
+            // starts above or ends below the screen still opens whole
+            let (v0, vn) = if nb <= bh as usize { (0, nb) } else { (nb - bh as usize - scr.min(nb - bh as usize), bh as usize) };
+            let wl = links(&bl, v0.saturating_sub(16), (v0 + vn + 16).min(nb), w);
             let ls = tail(bl, bh as usize, &mut scr);
             let pad_top = bh as usize - ls.len();
             let s0 = nb.saturating_sub(ls.len() + scr);
@@ -1052,12 +1107,14 @@ impl V for V1 {
             });
             let y0 = top + pad_top as u16;
             let mut ul = vec![];
-            for (k, l) in ls.iter().enumerate() {
-                for (xa, xb, u) in urls(l) {
-                    if !lk.iter().any(|x| x.0 == y0 + k as u16 && x.1 < x0 + xb && x0 + xa < x.2) {
-                        lk.push((y0 + k as u16, x0 + xa, x0 + xb, u));
-                        ul.push((y0 + k as u16, x0 + xa, x0 + xb));
-                    }
+            for (i, xa, xb, u) in wl {
+                if i < s0 || i >= s0 + ls.len() {
+                    continue;
+                }
+                let y = y0 + (i - s0) as u16;
+                if !lk.iter().any(|x| x.0 == y && x.1 < x0 + xb && x0 + xa < x.2) {
+                    lk.push((y, x0 + xa, x0 + xb, u));
+                    ul.push((y, x0 + xa, x0 + xb));
                 }
             }
             drop(lk);
@@ -1336,5 +1393,45 @@ mod tests {
         assert!(u("no link, xhttps://nope.example and https://").is_empty());
         let l = Line::from(vec![Span::raw("  é "), Span::raw("https://example.com")]);
         assert_eq!(urls(&l)[0].0, 4);
+    }
+
+    /// Lines as the body draws assistant text: wrapped by wsegs at w - 2, two spaces in front.
+    fn wrapped(s: &str, w: usize) -> Vec<Line<'static>> {
+        noname::wsegs(&[(s.to_string(), Style::default())], w - 2)
+            .into_iter()
+            .map(|l| {
+                let mut v = vec![Span::raw("  ")];
+                v.extend(l);
+                Line::from(v)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wrapped_link_opens_whole() {
+        let u = "https://github.com/Silvertree2010/noname/blob/main/src/main.rs?plain=1#L255";
+        let bl = wrapped(&format!("see {u} for it."), 30);
+        assert!(bl.len() >= 4);
+        let l = links(&bl, 0, bl.len(), 30);
+        assert!(l.len() >= 3, "{l:?}");
+        assert!(l.iter().all(|x| x.3 == u), "{l:?}");
+        // every piece sits on its own line, inside the text area
+        let mut rows: Vec<usize> = l.iter().map(|x| x.0).collect();
+        rows.dedup();
+        assert_eq!(rows.len(), l.len());
+        assert!(l.iter().all(|x| x.1 >= 2 && x.2 <= 30));
+        // the window can start in the middle of the link
+        let l2 = links(&bl, 2, bl.len(), 30);
+        assert!(l2.iter().all(|x| x.3 != u));
+    }
+
+    #[test]
+    fn short_links_are_not_joined() {
+        // the link ends at the edge but the next line is a new word at another column
+        let bl = vec![Line::from("ab https://a.example/x"), Line::from("cd more")];
+        assert_eq!(links(&bl, 0, 2, 22).iter().map(|x| x.3.as_str()).collect::<Vec<_>>(), ["https://a.example/x"]);
+        // a link that does not reach the edge stays on its line
+        let bl = vec![Line::from("  https://a.example/x"), Line::from("  more")];
+        assert_eq!(links(&bl, 0, 2, 30).iter().map(|x| x.3.as_str()).collect::<Vec<_>>(), ["https://a.example/x"]);
     }
 }
