@@ -317,10 +317,16 @@ pub fn getclip() -> Option<String> {
     if t.is_empty() { None } else { Some(t) }
 }
 
-/// gsettings path of the Ptyxis profile this tab runs in; Ptyxis applies its opacity live.
-fn ptyxis() -> Option<String> {
+/// The Ptyxis profile id of this tab (from PTYXIS_PROFILE), when gsettings can change it.
+fn ptyxis_id() -> Option<String> {
     let p = std::env::var("PTYXIS_PROFILE").ok()?;
-    (!p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric()) && which("gsettings").is_some()).then(|| format!("org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{p}/"))
+    (!p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric()) && which("gsettings").is_some()).then_some(p)
+}
+
+/// gsettings path of the Ptyxis profile this tab runs in; Ptyxis applies its opacity live.
+/// The setting belongs to the profile, so it changes every tab and window that uses it.
+fn ptyxis() -> Option<String> {
+    ptyxis_id().map(|p| format!("org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{p}/"))
 }
 
 /// Window opacity of the terminal, 0.0 to 1.0, when noname can change it (Ptyxis only for now).
@@ -334,10 +340,38 @@ pub fn set_term_opacity(v: f32) -> bool {
     std::process::Command::new("gsettings").args(["set", &p, "opacity", &format!("{:.2}", v.clamp(0.0, 1.0))]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
-/// Sets the terminal to noname's opacity (percent) and notes the terminal's own value
+/// File with the profile's own opacity from before noname changed it, one per profile.
+/// The older single `opacity-orig` file is taken over by the first profile that looks.
+fn opacity_orig(id: &str) -> String {
+    let f = cfgfile(&format!("opacity-orig-{id}"));
+    let old = cfgfile("opacity-orig");
+    if std::fs::metadata(&f).is_err() && std::fs::metadata(&old).is_ok() {
+        let _ = std::fs::rename(&old, &f);
+    }
+    f
+}
+
+/// Another noname (not a test run) is running in a tab of the same Ptyxis profile.
+fn others_in_profile(id: &str) -> bool {
+    let me = std::process::id();
+    let want = format!("PTYXIS_PROFILE={id}");
+    let Ok(rd) = std::fs::read_dir("/proc") else { return false };
+    rd.flatten().any(|e| {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { return false };
+        if pid == me || std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|c| c.trim() != "noname").unwrap_or(true) {
+            return false;
+        }
+        let Ok(env) = std::fs::read(format!("/proc/{pid}/environ")) else { return false };
+        let vars: Vec<&[u8]> = env.split(|b| *b == 0).collect();
+        vars.contains(&want.as_bytes()) && !vars.iter().any(|v| v.starts_with(b"NONAME_MOCK="))
+    })
+}
+
+/// Sets the terminal to noname's opacity (percent) and notes the profile's own value
 /// first, so `opacity_back` can put it back on exit, also after a crash on the next run.
 pub fn opacity_apply(pct: u8) -> bool {
-    let f = cfgfile("opacity-orig");
+    let Some(id) = ptyxis_id() else { return false };
+    let f = opacity_orig(&id);
     if std::fs::metadata(&f).is_err() {
         let Some(cur) = term_opacity() else { return false };
         if let Some(d) = std::path::Path::new(&f).parent() {
@@ -348,9 +382,21 @@ pub fn opacity_apply(pct: u8) -> bool {
     set_term_opacity(pct as f32 / 100.0)
 }
 
-/// Gives the terminal its own opacity back (no-op when noname never changed it).
+/// Gives the profile its own opacity back when this is the last noname using it, so
+/// closing one noname does not make the others opaque (no-op when nothing was changed).
 pub fn opacity_back() {
-    let f = cfgfile("opacity-orig");
+    if let Some(id) = ptyxis_id() {
+        if !others_in_profile(&id) {
+            opacity_restore();
+        }
+    }
+}
+
+/// Gives the profile its own opacity back now, also when other nonames still run in it
+/// (the menu set to 100%: the setting is shared, so they all go back).
+pub fn opacity_restore() {
+    let Some(id) = ptyxis_id() else { return };
+    let f = opacity_orig(&id);
     if let Some(v) = std::fs::read_to_string(&f).ok().and_then(|s| s.trim().parse::<f32>().ok()) {
         if set_term_opacity(v) {
             let _ = std::fs::remove_file(&f);

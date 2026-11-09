@@ -95,9 +95,12 @@ pub const MODELS: [&str; 4] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1
 /// Window opacity steps in the /noname menu, in percent.
 pub const OPAC: [u8; 8] = [100, 90, 80, 70, 60, 50, 40, 30];
 
+/// Opacity when nothing is set in the /noname menu.
+pub const OPAC_DEFAULT: u8 = 70;
+
 /// noname's window opacity setting in percent (100 = leave the terminal alone).
 pub fn opac() -> u8 {
-    std::fs::read_to_string(sys::cfgfile("opacity")).ok().and_then(|s| s.trim().parse().ok()).filter(|v| OPAC.contains(v)).unwrap_or(100)
+    std::fs::read_to_string(sys::cfgfile("opacity")).ok().and_then(|s| s.trim().parse().ok()).filter(|v| OPAC.contains(v)).unwrap_or(OPAC_DEFAULT)
 }
 
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -950,7 +953,7 @@ impl App {
             return;
         }
         let ok = if v == 100 {
-            sys::opacity_back();
+            sys::opacity_restore();
             true
         } else {
             sys::opacity_apply(v)
@@ -964,7 +967,7 @@ impl App {
             let _ = std::fs::create_dir_all(d);
         }
         let _ = std::fs::write(&f, v.to_string());
-        self.toast(format!("opacity  {v}%"));
+        self.toast(format!("opacity  {v}%  (all tabs with this Ptyxis profile)"));
     }
 
     pub fn settheme(&mut self, i: usize) {
