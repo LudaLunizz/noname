@@ -1299,12 +1299,22 @@ impl App {
     }
 
     fn clipv(&mut self) {
-        match img::clip() {
+        self.clipped(img::clip())
+    }
+
+    /// Right-click paste: the clipboard including text on every system.
+    fn clipv_any(&mut self) {
+        self.clipped(img::clip_any())
+    }
+
+    fn clipped(&mut self, c: img::Clip) {
+        match c {
             img::Clip::Img(b) => {
                 self.attach(b);
             }
             img::Clip::Files(v) => self.files(v),
             img::Clip::Text(t) => self.paste(t),
+            img::Clip::Empty if !self.clip.is_empty() => self.paste(self.clip.clone()),
             img::Clip::Empty => self.toast("clipboard is empty"),
         }
     }
@@ -2277,10 +2287,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                     }
                     MouseEventKind::Down(MouseButton::Right) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
                         a.msel = None;
-                        match sys::getclip().or_else(|| (!a.clip.is_empty()).then(|| a.clip.clone())) {
-                            Some(t) => a.paste(t),
-                            None => a.toast("clipboard is empty"),
-                        }
+                        // same as ctrl+v (images and copied files attach), with noname's own copy
+                        // as fallback when there is no clipboard tool
+                        a.clipv_any();
                     }
                     MouseEventKind::ScrollUp => {
                         a.msel = None;
