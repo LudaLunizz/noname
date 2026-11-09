@@ -975,6 +975,7 @@ impl V for V1 {
 
         let mid = tvis && tp == 0 && bh >= 6;
         if a.bs.is_empty() {
+            a.cg.set((0, 0, 0, 0));
             if mid {
                 let y = top + bh / 2 - 3;
                 for (i, l) in LOGO.iter().enumerate() {
@@ -994,9 +995,11 @@ impl V for V1 {
             }
             let mut scr = self.sf.round() as usize;
             let nb = bl.len();
+            *a.btx.borrow_mut() = bl.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
             let ls = tail(bl, bh as usize, &mut scr);
             let pad_top = bh as usize - ls.len();
             let s0 = nb.saturating_sub(ls.len() + scr);
+            a.cg.set((top + pad_top as u16, ls.len(), s0, x0));
             let mut lk = a.links.borrow_mut();
             lk.clear();
             LK.with(|l| {
@@ -1199,7 +1202,7 @@ impl V for V1 {
             let ar = f.area();
             self.bg = a.bgw.and_then(|k| noname::bg::Bg::new(k, ar.height, ar.width).ok());
         }
-        if a.msel.is_some() {
+        if a.msel.is_some() || a.csel.is_some() {
             *a.txt.borrow_mut() = Some(f.buffer_mut().clone());
         }
         if let Some(b) = &mut self.bg {

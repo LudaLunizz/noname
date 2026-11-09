@@ -66,7 +66,7 @@ Other flags go straight to `claude`.
 | `ctrl+b` | move to background | `/diff` | workspace diff |
 | `@` | mention a file | `/effort` | effort level |
 | `↓` | tasks | `/rename` | name the session |
-| `drag` | select and copy | | |
+| `drag` | select and copy | `double / triple click` | copy word / line |
 
 Every Claude Code command and skill works as usual.
 

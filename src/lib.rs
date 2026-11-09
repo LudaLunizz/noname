@@ -296,6 +296,11 @@ pub struct App {
     pub msel: Option<(u16, u16, u16, u16)>,
     pub seld: bool,
     pub txt: std::cell::RefCell<Option<ratatui::buffer::Buffer>>,
+    pub csel: Option<((usize, u16), (usize, u16))>,
+    pub cg: Cell<(u16, usize, usize, u16)>,
+    pub btx: std::cell::RefCell<Vec<String>>,
+    pub my: (u16, u16),
+    pub lc: (Instant, u16, u16, u8),
 }
 
 #[derive(Clone, Default)]
@@ -530,6 +535,11 @@ impl App {
             msel: None,
             seld: false,
             txt: std::cell::RefCell::new(None),
+            csel: None,
+            cg: Cell::new((0, 0, 0, 0)),
+            btx: std::cell::RefCell::new(vec![]),
+            my: (0, 0),
+            lc: (Instant::now(), u16::MAX, u16::MAX, 0),
             tf: false,
         }
     }
@@ -1162,6 +1172,81 @@ impl App {
         self.cur = j + n;
         self.ms = 0;
         self.fq = None;
+    }
+
+    pub fn cpos(&self, x: u16, y: u16) -> Option<(usize, u16)> {
+        let (yt, n, s0, x0) = self.cg.get();
+        (n > 0 && y >= yt && ((y - yt) as usize) < n).then(|| (s0 + (y - yt) as usize, x.saturating_sub(x0)))
+    }
+
+    pub fn cclamp(&self, x: u16, y: u16) -> (usize, u16) {
+        let (yt, n, s0, _) = self.cg.get();
+        if y < yt {
+            (s0, 0)
+        } else if (y - yt) as usize >= n {
+            (s0 + n.saturating_sub(1), u16::MAX)
+        } else {
+            self.cpos(x, y).unwrap_or((s0, 0))
+        }
+    }
+
+    pub fn word(&self, p: (usize, u16)) -> Option<((usize, u16), (usize, u16))> {
+        let bt = self.btx.borrow();
+        let l = bt.get(p.0)?;
+        let mut cs: Vec<(u16, u16, char)> = vec![];
+        let mut x = 0u16;
+        for c in l.chars() {
+            let w = c.width().unwrap_or(0) as u16;
+            cs.push((x, x + w.max(1) - 1, c));
+            x += w;
+        }
+        let i = cs.iter().position(|c| p.1 >= c.0 && p.1 <= c.1)?;
+        let wc = |c: char| !c.is_whitespace() && !"()[]{}<>\"'`,;|".contains(c);
+        if !wc(cs[i].2) {
+            return Some(((p.0, cs[i].0), (p.0, cs[i].1)));
+        }
+        let mut a = i;
+        while a > 0 && wc(cs[a - 1].2) {
+            a -= 1;
+        }
+        let mut b = i;
+        while b + 1 < cs.len() && wc(cs[b + 1].2) {
+            b += 1;
+        }
+        Some(((p.0, cs[a].0), (p.0, cs[b].1)))
+    }
+
+    pub fn cvis(&self) -> Option<(u16, u16, u16, u16)> {
+        let (a, b) = self.csel?;
+        let (p0, p1) = if a <= b { (a, b) } else { (b, a) };
+        let (yt, n, s0, x0) = self.cg.get();
+        if n == 0 || p1.0 < s0 || p0.0 >= s0 + n {
+            return None;
+        }
+        let st = if p0.0 < s0 { (0, yt) } else { (x0.saturating_add(p0.1), yt + (p0.0 - s0) as u16) };
+        let en = if p1.0 >= s0 + n { (u16::MAX, yt + n as u16 - 1) } else { (x0.saturating_add(p1.1), yt + (p1.0 - s0) as u16) };
+        Some((st.0, st.1, en.0, en.1))
+    }
+
+    pub fn ctext(&self) -> String {
+        let Some((a, b)) = self.csel else { return String::new() };
+        let (p0, p1) = if a <= b { (a, b) } else { (b, a) };
+        let bt = self.btx.borrow();
+        let mut ls = vec![];
+        for i in p0.0..=p1.0.min(bt.len().saturating_sub(1)) {
+            let (xa, xb) = (if i == p0.0 { p0.1 } else { 0 }, if i == p1.0 { p1.1 } else { u16::MAX });
+            let mut l = String::new();
+            let mut x = 0u16;
+            for c in bt[i].chars() {
+                let w = c.width().unwrap_or(0) as u16;
+                if x >= xa && x <= xb {
+                    l.push(c);
+                }
+                x += w;
+            }
+            ls.push(l.trim_end().to_string());
+        }
+        tidy(ls)
     }
 
     pub fn click(&mut self, x: u16, y: u16) {
@@ -2204,7 +2289,8 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         a.cp.set(None);
         let cf = term.draw(|f| {
             v.draw(f, &a);
-            selhl(f.buffer_mut(), a.msel);
+            let tx = a.txt.borrow();
+            selhl(f.buffer_mut(), a.msel.or_else(|| a.cvis()), tx.as_ref());
         })?;
         if let Ok(p) = std::env::var("NONAME_SHOT") {
             if p.contains("{}") {
@@ -2234,6 +2320,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     if !a.seld {
                         a.msel = None;
+                        a.csel = None;
                     }
                     if !v.key(&k, &mut a) {
                         a.key(k)
@@ -2242,32 +2329,68 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 Event::Paste(s) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => a.paste(s),
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        a.msel = Some((m.column, m.row, m.column, m.row));
+                        let (x, y) = (m.column, m.row);
+                        let n = if a.lc.0.elapsed() < Duration::from_millis(400) && (a.lc.1, a.lc.2) == (x, y) { a.lc.3 % 3 + 1 } else { 1 };
+                        a.lc = (Instant::now(), x, y, n);
+                        a.msel = None;
+                        a.csel = None;
+                        match a.cpos(x, y) {
+                            Some(p) => {
+                                a.csel = match n {
+                                    1 => Some((p, p)),
+                                    2 => a.word(p),
+                                    _ => Some(((p.0, 0), (p.0, u16::MAX))),
+                                }
+                            }
+                            None => a.msel = Some((x, y, x, y)),
+                        }
                         a.seld = true;
+                        a.my = (x, y);
                     }
                     MouseEventKind::Drag(MouseButton::Left) if a.seld => {
-                        if let Some(s) = &mut a.msel {
+                        a.my = (m.column, m.row);
+                        if a.csel.is_some() {
+                            let h = a.cclamp(m.column, m.row);
+                            if let Some(s) = &mut a.csel {
+                                s.1 = h;
+                            }
+                        } else if let Some(s) = &mut a.msel {
                             s.2 = m.column;
                             s.3 = m.row;
                         }
                     }
                     MouseEventKind::Up(MouseButton::Left) if a.seld => {
                         a.seld = false;
-                        match a.msel {
-                            Some((x0, y0, x1, y1)) if (x0, y0) == (x1, y1) => {
-                                a.msel = None;
+                        if let Some((p0, p1)) = a.csel {
+                            if p0 == p1 && a.lc.3 == 1 {
+                                a.csel = None;
                                 a.click(m.column, m.row);
-                            }
-                            Some(s) => {
-                                let t = a.txt.borrow().as_ref().map(|b| seltext(b, s)).unwrap_or_default();
+                            } else {
+                                let t = a.ctext();
                                 if t.trim().is_empty() {
-                                    a.msel = None;
+                                    a.csel = None;
                                 } else {
                                     copy(&t);
                                     a.toast("copied");
                                 }
                             }
-                            None => {}
+                        } else {
+                            match a.msel {
+                                Some((x0, y0, x1, y1)) if (x0, y0) == (x1, y1) => {
+                                    a.msel = None;
+                                    a.click(m.column, m.row);
+                                }
+                                Some(s) => {
+                                    let t = a.txt.borrow().as_ref().map(|b| seltext(b, s)).unwrap_or_default();
+                                    if t.trim().is_empty() {
+                                        a.msel = None;
+                                    } else {
+                                        copy(&t);
+                                        a.toast("copied");
+                                    }
+                                }
+                                None => {}
+                            }
                         }
                     }
                     MouseEventKind::ScrollUp => {
@@ -2286,6 +2409,22 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 break;
             }
         }
+        if a.seld && a.csel.is_some() {
+            let (yt, n, _, _) = a.cg.get();
+            let y = a.my.1;
+            let out = y < yt || (n > 0 && (y - yt) as usize >= n);
+            if y < yt && a.scr < a.smax.get() {
+                a.scr += 1;
+            } else if out && y >= yt && a.scr > 0 {
+                a.scr -= 1;
+            }
+            if out {
+                let h = a.cclamp(a.my.0, a.my.1);
+                if let Some(s) = &mut a.csel {
+                    s.1 = h;
+                }
+            }
+        }
         if let Ok(cy) = std::env::var("NONAME_BGCYCLE") {
             let v: Vec<&str> = cy.split(',').collect();
             if a.t % 30 == 0 && !v.is_empty() {
@@ -2302,7 +2441,7 @@ fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>) {
+fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>, t: Option<&ratatui::buffer::Buffer>) {
     let Some(s) = s else { return };
     if (s.0, s.1) == (s.2, s.3) {
         return;
@@ -2314,6 +2453,9 @@ fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>) {
         let xb = if y == y1 { x1 } else { ar.width.saturating_sub(1) };
         for x in xa..=xb.min(ar.width.saturating_sub(1)) {
             let c = &mut b[(x, y)];
+            if let Some(t) = t.filter(|t| t.area == ar) {
+                *c = t[(x, y)].clone();
+            }
             c.set_style(c.style().add_modifier(ratatui::style::Modifier::REVERSED));
         }
     }
@@ -2341,6 +2483,10 @@ fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
         }
         ls.push(l.trim_end().to_string());
     }
+    tidy(ls)
+}
+
+fn tidy(ls: Vec<String>) -> String {
     let ind = ls.iter().skip(1).filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
     let mut o: Vec<String> = ls.iter().enumerate().map(|(i, l)| if i == 0 { l.trim_start().to_string() } else { l.get(ind.min(l.len())..).unwrap_or("").to_string() }).collect();
     while o.last().is_some_and(|l| l.is_empty()) {
@@ -2574,13 +2720,18 @@ fn hex(c: Color) -> Option<String> {
 
 fn css(c: &ratatui::buffer::Cell) -> String {
     let mut s = String::new();
-    if let Some(h) = hex(c.fg) {
+    let m = c.modifier;
+    let (fg, bg) = if m.contains(Modifier::REVERSED) {
+        (if c.bg == Color::Reset { pal::BASE() } else { c.bg }, if c.fg == Color::Reset { pal::FG() } else { c.fg })
+    } else {
+        (c.fg, c.bg)
+    };
+    if let Some(h) = hex(fg) {
         s += &format!("color:{h};");
     }
-    if let Some(h) = hex(c.bg) {
+    if let Some(h) = hex(bg) {
         s += &format!("background:{h};");
     }
-    let m = c.modifier;
     if m.contains(Modifier::BOLD) {
         s += "font-weight:700;";
     }
