@@ -1252,6 +1252,11 @@ impl App {
     pub fn click(&mut self, x: u16, y: u16) {
         let hit = self.links.borrow().iter().find(|l| l.0 == y && x >= l.1 && x < l.2).map(|l| l.3.clone());
         if let Some(p) = hit {
+            if p.starts_with("https://") || p.starts_with("http://") {
+                sys::open_url(&p);
+                self.toast("open link");
+                return;
+            }
             let (path, line) = match p.rsplit_once(':') {
                 Some((a, b)) if b.chars().all(|c| c.is_ascii_digit()) && !b.is_empty() => (a.to_string(), b.to_string()),
                 _ => (p.clone(), String::new()),

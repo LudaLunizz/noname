@@ -225,6 +225,35 @@ pub fn open(path: &str, line: &str) {
     let _ = c.spawn();
 }
 
+/// Opens a web link in the default browser (NONAME_OPEN is for files, so it is not used here).
+pub fn open_url(url: &str) {
+    if !(url.starts_with("https://") || url.starts_with("http://")) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return;
+    }
+    let mut c = if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(windows) {
+        // not `cmd /c start`: cmd would read & | ^ in the url as its own syntax
+        // (and run what follows), while the link text comes from the model
+        let mut c = Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
+    let _ = c.spawn();
+}
+
 pub fn month() -> i32 {
     #[cfg(unix)]
     unsafe {
