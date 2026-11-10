@@ -279,6 +279,8 @@ pub struct App {
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub tasks: Vec<Task>,
+    /// last text copied with a mouse selection; right-click pastes it when no clipboard tool is there
+    pub clip: String,
     pub tk: Option<(usize, bool)>,
     tkp: u64,
     pub pk: Option<Pk>,
@@ -518,6 +520,7 @@ impl App {
             le: 0,
             imgs: vec![],
             tasks: vec![],
+            clip: String::new(),
             tk: None,
             tkp: 0,
             pk: None,
@@ -907,6 +910,7 @@ impl App {
             ("title", LAYOUT[3].1[lay(3)].into()),
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("location", LAYOUT[5].1[lay(5)].into()),
+            ("right-click paste", if rclick() { "on" } else { "off" }.into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -1386,12 +1390,22 @@ impl App {
     }
 
     fn clipv(&mut self) {
-        match img::clip() {
+        self.clipped(img::clip())
+    }
+
+    /// Right-click paste: the clipboard including text on every system.
+    fn clipv_any(&mut self) {
+        self.clipped(img::clip_any())
+    }
+
+    fn clipped(&mut self, c: img::Clip) {
+        match c {
             img::Clip::Img(b) => {
                 self.attach(b);
             }
             img::Clip::Files(v) => self.files(v),
             img::Clip::Text(t) => self.paste(t),
+            img::Clip::Empty if !self.clip.is_empty() => self.paste(self.clip.clone()),
             img::Clip::Empty => self.toast("clipboard is empty"),
         }
     }
@@ -1555,6 +1569,11 @@ impl App {
                         let j = sel - 7;
                         let n = LAYOUT[j].1.len();
                         setlay(j, (lay(j) + 1) % n);
+                    }
+                    13 => {
+                        let on = !rclick();
+                        setrclick(on);
+                        self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
                     }
                     _ => self.upcheck(true),
                 },
@@ -2384,8 +2403,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                                 if t.trim().is_empty() {
                                     a.csel = None;
                                 } else {
-                                    copy(&t);
-                                    a.toast("copied");
+                                    let n = t.chars().count();
+                                    let sys = copy(&t);
+                                    a.clip = t;
+                                    a.toast(if sys { format!("copied {n} chars") } else { format!("copied {n} chars · no wl-copy/xclip{}", if rclick() { ", right-click pastes here" } else { "" }) });
                                 }
                             }
                         } else {
@@ -2406,6 +2427,12 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                                 None => {}
                             }
                         }
+                    }
+                    MouseEventKind::Down(MouseButton::Right) if rclick() && a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
+                        a.msel = None;
+                        // same as ctrl+v (images and copied files attach), with noname's own copy
+                        // as fallback when there is no clipboard tool
+                        a.clipv_any();
                     }
                     MouseEventKind::ScrollUp => {
                         a.msel = None;
@@ -2538,10 +2565,10 @@ fn tidy(ls: Vec<String>) -> String {
     o.join("\n")
 }
 
-fn copy(t: &str) {
+fn copy(t: &str) -> bool {
     let _ = write!(io::stdout(), "\x1b]52;c;{}\x07", img::b64(t.as_bytes()));
     let _ = io::stdout().flush();
-    sys::setclip(t);
+    sys::setclip(t)
 }
 
 fn cur_label(q: &Option<Qa>, j: usize) -> String {
@@ -2623,6 +2650,27 @@ pub fn modeidx(s: &str) -> Option<usize> {
         "bypass" | "bypasspermissions" | "yolo" => Some(3),
         _ => None,
     }
+}
+
+static RCLICK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+pub fn rclick() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut m = RCLICK.load(Relaxed);
+    if m == u8::MAX {
+        m = (std::fs::read_to_string(sys::cfgfile("rclick")).unwrap_or_default().trim() == "on") as u8;
+        RCLICK.store(m, Relaxed);
+    }
+    m == 1
+}
+
+pub fn setrclick(on: bool) {
+    RCLICK.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+    let f = sys::cfgfile("rclick");
+    if let Some(d) = std::path::Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, if on { "on" } else { "off" });
 }
 
 pub fn defmode() -> Option<usize> {

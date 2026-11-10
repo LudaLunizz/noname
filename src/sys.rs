@@ -277,7 +277,9 @@ pub fn xclip_first() -> bool {
     std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && which("xclip").is_some()
 }
 
-pub fn setclip(t: &str) {
+/// Puts text on the system clipboard. Returns false when no clipboard tool was found,
+/// so the caller can say that only the terminal's own clipboard (OSC 52) was tried.
+pub fn setclip(t: &str) -> bool {
     let c: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
         Some(("pbcopy", &[]))
     } else if cfg!(windows) {
@@ -289,11 +291,13 @@ pub fn setclip(t: &str) {
     } else {
         None
     };
-    let Some((p, a)) = c else { return };
-    let Ok(mut ch) = Command::new(p).args(a).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return };
+    let Some((p, a)) = c else { return cfg!(windows) };
+    let Ok(mut ch) = Command::new(p).args(a).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return false };
     if let Some(mut i) = ch.stdin.take() {
         use std::io::Write;
         let _ = i.write_all(t.as_bytes());
     }
     std::thread::spawn(move || ch.wait());
+    true
 }
+
