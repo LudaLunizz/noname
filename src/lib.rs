@@ -96,7 +96,7 @@ pub const MODELS: [&str; 4] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1
 pub const OPAC: [u8; 8] = [100, 90, 80, 70, 60, 50, 40, 30];
 
 /// Opacity when nothing is set in the /noname menu.
-pub const OPAC_DEFAULT: u8 = 70;
+pub const OPAC_DEFAULT: u8 = 100;
 
 /// noname's window opacity setting in percent (100 = leave the terminal alone).
 pub fn opac() -> u8 {
@@ -949,18 +949,16 @@ impl App {
             return;
         }
         let v = OPAC[i];
-        if self.lv.is_none() && self.cx.is_none() {
-            self.toast(format!("opacity  {v}%"));
-            return;
-        }
-        let ok = if v == 100 {
+        let ok = if std::env::var("NONAME_MOCK").is_ok() {
+            true
+        } else if v == 100 {
             sys::opacity_restore();
             true
         } else {
             sys::opacity_apply(v)
         };
         if !ok {
-            self.toast("opacity works in Ptyxis; set it in your terminal's own settings");
+            self.toast("opacity works in kitty, Alacritty, Ptyxis and GNOME Terminal; set it in your terminal's own settings");
             return;
         }
         let f = sys::cfgfile("opacity");
@@ -968,7 +966,8 @@ impl App {
             let _ = std::fs::create_dir_all(d);
         }
         let _ = std::fs::write(&f, v.to_string());
-        self.toast(format!("opacity  {v}%  (all tabs with this Ptyxis profile)"));
+        let sc = sys::opacity_scope();
+        self.toast(if v == 100 || sc.is_empty() { format!("opacity  {v}%") } else { format!("opacity  {v}%  ({sc})") });
     }
 
     pub fn settheme(&mut self, i: usize) {
