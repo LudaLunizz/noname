@@ -251,6 +251,136 @@ fn link(i: usize, x: usize, len: usize, t: &str) {
     }
 }
 
+/// The characters of a rendered line with their column and width.
+fn cols(l: &Line) -> Vec<(usize, char, usize)> {
+    let mut o = vec![];
+    let mut x = 0;
+    for sp in &l.spans {
+        for c in sp.content.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            o.push((x, c, cw));
+            x += cw;
+        }
+    }
+    o
+}
+
+/// Web links in a rendered line: (start column, end column, url).
+#[cfg(test)]
+fn urls(l: &Line) -> Vec<(u16, u16, String)> {
+    links(std::slice::from_ref(l), 0, 1, usize::MAX).into_iter().map(|(_, xa, xb, u)| (xa, xb, u)).collect()
+}
+
+/// Web links in lines a..b of the body, as (line, start column, end column, url) pieces.
+/// The wrapper cuts a word longer than the width hard at the right edge (column `w`) and
+/// goes on at the same column on the next line, so such a cut is joined back first:
+/// a link that wraps over several lines gives one piece per line, each with the full url.
+fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, String)> {
+    // (line, column, char, width); a '\n' with line usize::MAX separates lines that are not joined
+    let mut cs: Vec<(usize, usize, char, usize)> = vec![];
+    let mut from = 0;
+    let mut nx = if a < b { cols(&bl[a]) } else { vec![] };
+    for k in a..b {
+        let cur = std::mem::take(&mut nx);
+        let st = cs.len();
+        cs.extend(cur.iter().filter(|c| c.0 >= from).map(|c| (k, c.0, c.1, c.2)));
+        from = 0;
+        if k + 1 < b {
+            nx = cols(&bl[k + 1]);
+            if let Some(&(lx, lc, lw)) = cur.last() {
+                if !lc.is_whitespace() && lx + lw == w {
+                    // the last word of this line, and where it starts
+                    let p = cs[st..].iter().rev().take_while(|c| !c.2.is_whitespace()).last().map(|c| c.1).unwrap_or(0);
+                    let cont = nx.iter().find(|c| c.0 >= p).is_some_and(|c| c.0 == p && !c.1.is_whitespace());
+                    if cont && nx.iter().take_while(|c| c.0 < p).all(|c| c.1.is_whitespace()) {
+                        from = p;
+                        continue;
+                    }
+                }
+            }
+        }
+        cs.push((usize::MAX, 0, '\n', 0));
+    }
+    let t: Vec<char> = cs.iter().map(|c| c.2).collect();
+    let mut o = vec![];
+    let mut i = 0;
+    while i < t.len() {
+        let r = &t[i..];
+        let at = r.starts_with(&['h', 't', 't', 'p', 's', ':', '/', '/']) || r.starts_with(&['h', 't', 't', 'p', ':', '/', '/']);
+        if !at || (i > 0 && t[i - 1].is_alphanumeric()) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < t.len() && !t[j].is_whitespace() && !matches!(t[j], '<' | '>' | '"' | '`' | '│' | '…') {
+            j += 1;
+        }
+        let mut e = j;
+        while e > i && matches!(t[e - 1], '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '*' | '_') {
+            e -= 1;
+        }
+        // a closing bracket belongs to the url only when it opened inside it
+        while e > i && matches!(t[e - 1], ')' | ']') {
+            let (op, cl) = if t[e - 1] == ')' { ('(', ')') } else { ('[', ']') };
+            let n = |c: char| t[i..e].iter().filter(|&&x| x == c).count();
+            if n(cl) > n(op) { e -= 1 } else { break }
+        }
+        let u: String = t[i..e].iter().collect();
+        if u.len() > 10 {
+            // one piece per line the url runs over
+            let mut q = i;
+            while q < e {
+                let ln = cs[q].0;
+                let mut z = q;
+                while z < e && cs[z].0 == ln {
+                    z += 1;
+                }
+                let xb = cs[z - 1].1 + cs[z - 1].3;
+                o.push((ln, cs[q].1 as u16, xb as u16, u.clone()));
+                q = z;
+            }
+        }
+        i = j.max(i + 1);
+    }
+    o
+}
+
+/// The panel lines (menus and pickers above the input) cut to `h` rows. When they do not
+/// fit, the window scrolls so the selected row (the one starting with "› ") stays in view,
+/// with "↑ n more" / "↓ n more" on the first and last row when there is more.
+fn fit_panel(v: Vec<Line<'static>>, h: usize) -> Vec<Line<'static>> {
+    let n = v.len();
+    if n <= h {
+        return v;
+    }
+    if h == 0 {
+        return vec![];
+    }
+    let foc = v.iter().position(|l| l.spans.first().is_some_and(|s| s.content == "› ")).unwrap_or(0);
+    // rows for content: the arrows take a row each when there is more on that side
+    let mut s = foc.saturating_sub(h / 2).min(n - h);
+    let up = |s: usize| s > 0 && h >= 3;
+    let down = |s: usize| s + h < n && h >= 3;
+    // keep the selected row off the arrow rows
+    while up(s) && foc <= s && s > 0 {
+        s -= 1;
+    }
+    while down(s) && foc + 1 >= s + h && s + h < n {
+        s += 1;
+    }
+    let (a, b) = (up(s), down(s));
+    let mut o: Vec<Line<'static>> = v[s..s + h].to_vec();
+    let arrow = |t: String| Line::from(vec![pad(2), Span::styled(t, st(FA()))]);
+    if a {
+        o[0] = arrow(format!("↑ {} more", s + 1));
+    }
+    if b {
+        let k = o.len() - 1;
+        o[k] = arrow(format!("↓ {} more", n - (s + h) + 1));
+    }
+    o
+}
+
 fn body(a: &App, w: usize) -> Vec<Line<'static>> {
     LK.with(|l| l.borrow_mut().clear());
     let m = mdt();
@@ -623,6 +753,14 @@ impl V for V1 {
 
     fn draw(&mut self, f: &mut Frame, a: &App) {
         let ar = f.area();
+        // the frame needs 7 rows (input, status and borders) and some width; below that
+        // say so on one line instead of drawing past the edge
+        if ar.height < 7 || ar.width < 24 {
+            let t = if ar.height < 7 { "noname: make the window taller" } else { "noname: wider" };
+            let t: String = t.chars().take(ar.width as usize).collect();
+            f.render_widget(Paragraph::new(Span::styled(t, st(MU()))), Rect { height: ar.height.min(1), ..ar });
+            return;
+        }
         let w = (ar.width as usize).saturating_sub(6);
         let x0 = ar.x + (ar.width - w as u16) / 2;
         let iw = w - 2;
@@ -943,7 +1081,6 @@ impl V for V1 {
             }
             extra.push(Line::default());
         }
-        let eh = extra.len() as u16;
         let h = ar.height;
         let top_in = lay(0) == 1;
         let tvis = match lay(4) {
@@ -956,6 +1093,24 @@ impl V for V1 {
         let tvis = tvis && w >= lgw + 4 && h >= 24;
         let rt = if tvis && (1..=3).contains(&tp) { 5u16 } else { 0 };
         let rb = if tvis && tp == 4 { 5u16 } else { 0 };
+        // Fit everything in the window: the input, the panels above it (menus, pickers)
+        // and the rows under it share what the frame leaves, so nothing is drawn past the
+        // bottom (ratatui panics there). The body keeps up to 3 lines (1 while a panel is open); a panel that does not
+        // fit scrolls to its selected row, rows under the input end with "↓ n more".
+        let ih = ih.min(h.saturating_sub(6 + rt + rb) as usize).max(1);
+        let room = h.saturating_sub(ih as u16 + 6 + rt + rb);
+        // an open menu or picker gets the room first; the conversation keeps one line then
+        let room = room - room.min(if extra.is_empty() { 3 } else { 1 });
+        let eh = (extra.len() as u16).min(room);
+        let extra = fit_panel(extra, eh as usize);
+        let bwh = bwh.min(room - eh);
+        if bt.len() > bwh as usize {
+            let more = bt.len() - bwh as usize + 1;
+            bt.truncate((bwh as usize).saturating_sub(1));
+            if bwh > 0 {
+                bt.push(Line::from(vec![pad(2), Span::styled(format!("↓ {more} more"), st(FA()))]));
+            }
+        }
         let bh = h.saturating_sub(ih as u16 + bwh + eh + 6 + rt + rb);
         let (top, ey, ry, iy, bty) = if top_in {
             let iy = 2u16 + rt;
@@ -989,6 +1144,7 @@ impl V for V1 {
 
         let mid = tvis && tp == 0 && bh >= 6;
         if a.bs.is_empty() {
+            a.cg.set((0, 0, 0, 0));
             if mid {
                 let y = top + bh / 2 - 3;
                 for (i, l) in LOGO.iter().enumerate() {
@@ -1008,9 +1164,15 @@ impl V for V1 {
             }
             let mut scr = self.sf.round() as usize;
             let nb = bl.len();
+            // links of the visible lines, found with a margin so a wrapped link that
+            // starts above or ends below the screen still opens whole
+            let (v0, vn) = if nb <= bh as usize { (0, nb) } else { (nb - bh as usize - scr.min(nb - bh as usize), bh as usize) };
+            let wl = links(&bl, v0.saturating_sub(16), (v0 + vn + 16).min(nb), w);
+            *a.btx.borrow_mut() = bl.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
             let ls = tail(bl, bh as usize, &mut scr);
             let pad_top = bh as usize - ls.len();
             let s0 = nb.saturating_sub(ls.len() + scr);
+            a.cg.set((top + pad_top as u16, ls.len(), s0, x0));
             let mut lk = a.links.borrow_mut();
             lk.clear();
             LK.with(|l| {
@@ -1021,8 +1183,28 @@ impl V for V1 {
                     }
                 }
             });
+            let y0 = top + pad_top as u16;
+            let mut ul = vec![];
+            for (i, xa, xb, u) in wl {
+                if i < s0 || i >= s0 + ls.len() {
+                    continue;
+                }
+                let y = y0 + (i - s0) as u16;
+                if !lk.iter().any(|x| x.0 == y && x.1 < x0 + xb && x0 + xa < x.2) {
+                    lk.push((y, x0 + xa, x0 + xb, u));
+                    ul.push((y, x0 + xa, x0 + xb));
+                }
+            }
             drop(lk);
             f.render_widget(Paragraph::new(ls), col(top + pad_top as u16, bh - pad_top as u16));
+            let buf = f.buffer_mut();
+            for (y, xa, xb) in ul {
+                for x in xa..xb {
+                    if let Some(c) = buf.cell_mut((x, y)) {
+                        c.set_style(c.style().add_modifier(ratatui::style::Modifier::UNDERLINED));
+                    }
+                }
+            }
             if scr > 0 {
                 f.render_widget(Paragraph::new(Span::styled(format!("↓ {scr}"), st(FA()))).alignment(Alignment::Right), col(top + bh - 1, 1));
             }
@@ -1138,8 +1320,13 @@ impl V for V1 {
         };
         let mut model = if a.work { vec![Span::styled("work  ", st(PK()).bold())] } else { vec![] };
         model.extend(decode(&a.mname.replace(' ', "-"), a.t / 2, a.t, 41, st(LI()), &gd()));
-        if !a.effs.is_empty() {
-            model.push(Span::styled(format!("  {}", a.effs), st(FA())));
+        // effort sits on the usage line, on the side opposite the bars; with usage off it stays by the model
+        let eff = (!a.effs.is_empty()).then(|| vec![Span::styled(a.effs.clone(), st(FA()))]);
+        if lay(1) == 4 {
+            if let Some(e) = &eff {
+                model.push(pad(2));
+                model.extend(e.clone());
+            }
         }
         let cwd = vec![Span::styled(a.cwd.clone(), st(MU())), Span::styled(if a.br.is_empty() { String::new() } else { format!(" ({})", a.br) }, st(FA()))];
         let mut rows: [[Vec<Ch>; 3]; 2] = Default::default();
@@ -1190,6 +1377,15 @@ impl V for V1 {
             1 => rows[1][2].push(Ch::S(model)),
             _ => {}
         }
+        if let Some(e) = eff {
+            match lay(1) {
+                0 => rows[1][2].push(Ch::S(e)),
+                1 => rows[1][0].insert(0, Ch::S(e)),
+                2 => rows[0][2].push(Ch::S(e)),
+                3 => rows[0][0].insert(0, Ch::S(e)),
+                _ => {}
+            }
+        }
         for (ri, y) in [(0usize, rt), (1, sy)] {
             let [l, c, r] = &rows[ri];
             let c = join(c, &shown, 2);
@@ -1213,7 +1409,7 @@ impl V for V1 {
             let ar = f.area();
             self.bg = a.bgw.and_then(|k| noname::bg::Bg::new(k, ar.height, ar.width).ok());
         }
-        if a.msel.is_some() {
+        if a.msel.is_some() || a.csel.is_some() {
             *a.txt.borrow_mut() = Some(f.buffer_mut().clone());
         }
         if let Some(b) = &mut self.bg {
@@ -1365,4 +1561,107 @@ fn dur(s: f32) -> String {
 fn main() -> std::io::Result<()> {
     pal::load();
     run(V1 { db: [0.0; 3], lt: 0, sf: 0.0, bg: None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u(s: &str) -> Vec<String> {
+        urls(&Line::from(s.to_string())).into_iter().map(|x| x.2).collect()
+    }
+
+    #[test]
+    fn finds_web_links() {
+        assert_eq!(u("see https://example.com/a?b=1."), ["https://example.com/a?b=1"]);
+        assert_eq!(u("[docs](https://example.com/x)"), ["https://example.com/x"]);
+        assert_eq!(u("https://en.wikipedia.org/wiki/Rust_(language))"), ["https://en.wikipedia.org/wiki/Rust_(language)"]);
+        assert_eq!(u("two: http://a.example/1 and <https://b.example/2>"), ["http://a.example/1", "https://b.example/2"]);
+        assert!(u("no link, xhttps://nope.example and https://").is_empty());
+        let l = Line::from(vec![Span::raw("  é "), Span::raw("https://example.com")]);
+        assert_eq!(urls(&l)[0].0, 4);
+    }
+
+    /// Lines as the body draws assistant text: wrapped by wsegs at w - 2, two spaces in front.
+    fn wrapped(s: &str, w: usize) -> Vec<Line<'static>> {
+        noname::wsegs(&[(s.to_string(), Style::default())], w - 2)
+            .into_iter()
+            .map(|l| {
+                let mut v = vec![Span::raw("  ")];
+                v.extend(l);
+                Line::from(v)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wrapped_link_opens_whole() {
+        let u = "https://github.com/Silvertree2010/noname/blob/main/src/main.rs?plain=1#L255";
+        let bl = wrapped(&format!("see {u} for it."), 30);
+        assert!(bl.len() >= 4);
+        let l = links(&bl, 0, bl.len(), 30);
+        assert!(l.len() >= 3, "{l:?}");
+        assert!(l.iter().all(|x| x.3 == u), "{l:?}");
+        // every piece sits on its own line, inside the text area
+        let mut rows: Vec<usize> = l.iter().map(|x| x.0).collect();
+        rows.dedup();
+        assert_eq!(rows.len(), l.len());
+        assert!(l.iter().all(|x| x.1 >= 2 && x.2 <= 30));
+        // the window can start in the middle of the link
+        let l2 = links(&bl, 2, bl.len(), 30);
+        assert!(l2.iter().all(|x| x.3 != u));
+    }
+
+    #[test]
+    fn short_links_are_not_joined() {
+        // the link ends at the edge but the next line is a new word at another column
+        let bl = vec![Line::from("ab https://a.example/x"), Line::from("cd more")];
+        assert_eq!(links(&bl, 0, 2, 22).iter().map(|x| x.3.as_str()).collect::<Vec<_>>(), ["https://a.example/x"]);
+        // a link that does not reach the edge stays on its line
+        let bl = vec![Line::from("  https://a.example/x"), Line::from("  more")];
+        assert_eq!(links(&bl, 0, 2, 30).iter().map(|x| x.3.as_str()).collect::<Vec<_>>(), ["https://a.example/x"]);
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    fn panel(n: usize, sel: usize) -> Vec<Line<'static>> {
+        let mut v = vec![Line::from("title")];
+        for i in 0..n {
+            v.push(Line::from(vec![Span::raw(if i == sel { "› " } else { "  " }), Span::raw(format!("row {i}"))]));
+        }
+        v.push(Line::default());
+        v
+    }
+
+    fn text(v: &[Line]) -> Vec<String> {
+        v.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    #[test]
+    fn panel_that_fits_is_unchanged() {
+        assert_eq!(fit_panel(panel(5, 2), 10).len(), 7);
+    }
+
+    #[test]
+    fn selected_row_stays_visible() {
+        for h in 1..12 {
+            for sel in 0..15 {
+                let o = text(&fit_panel(panel(15, sel), h));
+                assert_eq!(o.len(), h);
+                assert!(o.iter().any(|l| l == &format!("› row {sel}")), "h {h} sel {sel}: {o:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn arrows_count_hidden_rows() {
+        let o = text(&fit_panel(panel(15, 7), 5));
+        let up: usize = o[0].trim().trim_start_matches("↑ ").trim_end_matches(" more").parse().unwrap();
+        let down: usize = o[4].trim().trim_start_matches("↓ ").trim_end_matches(" more").parse().unwrap();
+        // 17 lines in all: the 3 shown rows plus what the arrows stand for
+        assert_eq!(up + 3 + down, 17);
+    }
 }
