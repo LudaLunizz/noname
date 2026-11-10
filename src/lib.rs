@@ -329,6 +329,17 @@ pub struct Task {
     pub toks: u64,
     pub out: String,
     pub acts: Vec<String>,
+    /// workflow agents seen in workflow_progress: (index, 0 running/queued, 1 done, 2 error)
+    pub wf: Vec<(u64, u8)>,
+    /// phase of the newest running workflow agent
+    pub phase: String,
+    /// workflow name (deep-research, review-changes, ...), shown instead of the description
+    pub name: String,
+}
+
+/// Colour of each task kind in the footer and the list under the prompt.
+pub fn tcol(k: u8) -> ratatui::style::Color {
+    [pal::CY(), pal::GR(), pal::LI(), pal::PK()][k.min(3) as usize]
 }
 
 pub const TKIND: [(&str, &str, &str); 4] = [("$", "shell", "shells"), ("~", "monitor", "monitors"), ("&", "agent", "agents"), ("%", "workflow", "workflows")];
