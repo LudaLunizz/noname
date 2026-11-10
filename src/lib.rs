@@ -290,6 +290,8 @@ pub struct App {
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub tasks: Vec<Task>,
+    /// last text copied with a mouse selection; right-click pastes it when no clipboard tool is there
+    pub clip: String,
     pub tk: Option<(usize, bool)>,
     tkp: u64,
     pub pk: Option<Pk>,
@@ -307,6 +309,11 @@ pub struct App {
     pub msel: Option<(u16, u16, u16, u16)>,
     pub seld: bool,
     pub txt: std::cell::RefCell<Option<ratatui::buffer::Buffer>>,
+    pub csel: Option<((usize, u16), (usize, u16))>,
+    pub cg: Cell<(u16, usize, usize, u16)>,
+    pub btx: std::cell::RefCell<Vec<String>>,
+    pub my: (u16, u16),
+    pub lc: (Instant, u16, u16, u8),
 }
 
 #[derive(Clone, Default)]
@@ -333,6 +340,17 @@ pub struct Task {
     pub toks: u64,
     pub out: String,
     pub acts: Vec<String>,
+    /// workflow agents seen in workflow_progress: (index, 0 running/queued, 1 done, 2 error)
+    pub wf: Vec<(u64, u8)>,
+    /// phase of the newest running workflow agent
+    pub phase: String,
+    /// workflow name (deep-research, review-changes, ...), shown instead of the description
+    pub name: String,
+}
+
+/// Colour of each task kind in the footer and the list under the prompt.
+pub fn tcol(k: u8) -> ratatui::style::Color {
+    [pal::CY(), pal::GR(), pal::LI(), pal::PK()][k.min(3) as usize]
 }
 
 pub const TKIND: [(&str, &str, &str); 4] = [("$", "shell", "shells"), ("~", "monitor", "monitors"), ("&", "agent", "agents"), ("%", "workflow", "workflows")];
@@ -524,6 +542,7 @@ impl App {
             le: 0,
             imgs: vec![],
             tasks: vec![],
+            clip: String::new(),
             tk: None,
             tkp: 0,
             pk: None,
@@ -541,6 +560,11 @@ impl App {
             msel: None,
             seld: false,
             txt: std::cell::RefCell::new(None),
+            csel: None,
+            cg: Cell::new((0, 0, 0, 0)),
+            btx: std::cell::RefCell::new(vec![]),
+            my: (0, 0),
+            lc: (Instant::now(), u16::MAX, u16::MAX, 0),
             tf: false,
         }
     }
@@ -908,6 +932,7 @@ impl App {
             ("title", LAYOUT[3].1[lay(3)].into()),
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("location", LAYOUT[5].1[lay(5)].into()),
+            ("right-click paste", if rclick() { "on" } else { "off" }.into()),
             ("opacity", format!("{}%", opac())),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
@@ -1217,9 +1242,89 @@ impl App {
         self.fq = None;
     }
 
+    pub fn cpos(&self, x: u16, y: u16) -> Option<(usize, u16)> {
+        let (yt, n, s0, x0) = self.cg.get();
+        (n > 0 && y >= yt && ((y - yt) as usize) < n).then(|| (s0 + (y - yt) as usize, x.saturating_sub(x0)))
+    }
+
+    pub fn cclamp(&self, x: u16, y: u16) -> (usize, u16) {
+        let (yt, n, s0, _) = self.cg.get();
+        if y < yt {
+            (s0, 0)
+        } else if (y - yt) as usize >= n {
+            (s0 + n.saturating_sub(1), u16::MAX)
+        } else {
+            self.cpos(x, y).unwrap_or((s0, 0))
+        }
+    }
+
+    pub fn word(&self, p: (usize, u16)) -> Option<((usize, u16), (usize, u16))> {
+        let bt = self.btx.borrow();
+        let l = bt.get(p.0)?;
+        let mut cs: Vec<(u16, u16, char)> = vec![];
+        let mut x = 0u16;
+        for c in l.chars() {
+            let w = c.width().unwrap_or(0) as u16;
+            cs.push((x, x + w.max(1) - 1, c));
+            x += w;
+        }
+        let i = cs.iter().position(|c| p.1 >= c.0 && p.1 <= c.1)?;
+        let wc = |c: char| !c.is_whitespace() && !"()[]{}<>\"'`,;|".contains(c);
+        if !wc(cs[i].2) {
+            return Some(((p.0, cs[i].0), (p.0, cs[i].1)));
+        }
+        let mut a = i;
+        while a > 0 && wc(cs[a - 1].2) {
+            a -= 1;
+        }
+        let mut b = i;
+        while b + 1 < cs.len() && wc(cs[b + 1].2) {
+            b += 1;
+        }
+        Some(((p.0, cs[a].0), (p.0, cs[b].1)))
+    }
+
+    pub fn cvis(&self) -> Option<(u16, u16, u16, u16)> {
+        let (a, b) = self.csel?;
+        let (p0, p1) = if a <= b { (a, b) } else { (b, a) };
+        let (yt, n, s0, x0) = self.cg.get();
+        if n == 0 || p1.0 < s0 || p0.0 >= s0 + n {
+            return None;
+        }
+        let st = if p0.0 < s0 { (0, yt) } else { (x0.saturating_add(p0.1), yt + (p0.0 - s0) as u16) };
+        let en = if p1.0 >= s0 + n { (u16::MAX, yt + n as u16 - 1) } else { (x0.saturating_add(p1.1), yt + (p1.0 - s0) as u16) };
+        Some((st.0, st.1, en.0, en.1))
+    }
+
+    pub fn ctext(&self) -> String {
+        let Some((a, b)) = self.csel else { return String::new() };
+        let (p0, p1) = if a <= b { (a, b) } else { (b, a) };
+        let bt = self.btx.borrow();
+        let mut ls = vec![];
+        for i in p0.0..=p1.0.min(bt.len().saturating_sub(1)) {
+            let (xa, xb) = (if i == p0.0 { p0.1 } else { 0 }, if i == p1.0 { p1.1 } else { u16::MAX });
+            let mut l = String::new();
+            let mut x = 0u16;
+            for c in bt[i].chars() {
+                let w = c.width().unwrap_or(0) as u16;
+                if x >= xa && x <= xb {
+                    l.push(c);
+                }
+                x += w;
+            }
+            ls.push(l.trim_end().to_string());
+        }
+        tidy(ls)
+    }
+
     pub fn click(&mut self, x: u16, y: u16) {
         let hit = self.links.borrow().iter().find(|l| l.0 == y && x >= l.1 && x < l.2).map(|l| l.3.clone());
         if let Some(p) = hit {
+            if p.starts_with("https://") || p.starts_with("http://") {
+                sys::open_url(&p);
+                self.toast("open link");
+                return;
+            }
             let (path, line) = match p.rsplit_once(':') {
                 Some((a, b)) if b.chars().all(|c| c.is_ascii_digit()) && !b.is_empty() => (a.to_string(), b.to_string()),
                 _ => (p.clone(), String::new()),
@@ -1349,12 +1454,22 @@ impl App {
     }
 
     fn clipv(&mut self) {
-        match img::clip() {
+        self.clipped(img::clip())
+    }
+
+    /// Right-click paste: the clipboard including text on every system.
+    fn clipv_any(&mut self) {
+        self.clipped(img::clip_any())
+    }
+
+    fn clipped(&mut self, c: img::Clip) {
+        match c {
             img::Clip::Img(b) => {
                 self.attach(b);
             }
             img::Clip::Files(v) => self.files(v),
             img::Clip::Text(t) => self.paste(t),
+            img::Clip::Empty if !self.clip.is_empty() => self.paste(self.clip.clone()),
             img::Clip::Empty => self.toast("clipboard is empty"),
         }
     }
@@ -1489,7 +1604,7 @@ impl App {
                     let n = LAYOUT[j].1.len();
                     setlay(j, (lay(j) + n - 1) % n);
                 }
-                KeyCode::Left if sel == 13 => self.setopac(false),
+                KeyCode::Left if sel == 14 => self.setopac(false),
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
                     0 if upd::managed().is_some() => {}
                     0 => {
@@ -1520,7 +1635,12 @@ impl App {
                         let n = LAYOUT[j].1.len();
                         setlay(j, (lay(j) + 1) % n);
                     }
-                    13 => self.setopac(true),
+                    13 => {
+                        let on = !rclick();
+                        setrclick(on);
+                        self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
+                    }
+                    14 => self.setopac(true),
                     _ => self.upcheck(true),
                 },
                 _ => {}
@@ -2218,6 +2338,7 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
         return dump(&mut v, &args[2..]);
     }
     enable_raw_mode()?;
+    TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let _ = write!(out, "\x1b[22;0t");
@@ -2240,14 +2361,22 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let r = lp(&mut term, &mut v);
     restore()?;
     sys::opacity_back();
-    if let Err(e) = &r {
-        eprintln!("noname: {e}");
-        std::process::exit(1);
+    match r {
+        Err(e) => {
+            eprintln!("noname: {e}");
+            std::process::exit(1);
+        }
+        Ok(sid) => {
+            if !sid.is_empty() {
+                println!("resume this session:  noname -r {sid}");
+            }
+            Ok(())
+        }
     }
-    r
 }
 
-fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<()> {
+/// Runs the UI; returns the Claude session id (empty when there is none) so it can be shown after exit.
+fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cx = args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
     let args: Vec<String> = args.into_iter().filter(|x| x != "--codex").collect();
@@ -2259,10 +2388,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         App::live(args)?
     };
     let mut lt = String::new();
-    sys::on_close(|| {
-        sys::opacity_back();
-        live::killall();
-    });
+    sys::on_close(bye);
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
         a.upcheck(false);
@@ -2271,7 +2397,8 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         a.cp.set(None);
         let cf = term.draw(|f| {
             v.draw(f, &a);
-            selhl(f.buffer_mut(), a.msel);
+            let tx = a.txt.borrow();
+            selhl(f.buffer_mut(), a.msel.or_else(|| a.cvis()), tx.as_ref());
         })?;
         if let Ok(p) = std::env::var("NONAME_SHOT") {
             if p.contains("{}") {
@@ -2301,6 +2428,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     if !a.seld {
                         a.msel = None;
+                        a.csel = None;
                     }
                     if !v.key(&k, &mut a) {
                         a.key(k)
@@ -2309,37 +2437,81 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 Event::Paste(s) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => a.paste(s),
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        a.msel = Some((m.column, m.row, m.column, m.row));
+                        let (x, y) = (m.column, m.row);
+                        let n = if a.lc.0.elapsed() < Duration::from_millis(400) && (a.lc.1, a.lc.2) == (x, y) { a.lc.3 % 3 + 1 } else { 1 };
+                        a.lc = (Instant::now(), x, y, n);
+                        a.msel = None;
+                        a.csel = None;
+                        match a.cpos(x, y) {
+                            Some(p) => {
+                                a.csel = match n {
+                                    1 => Some((p, p)),
+                                    2 => a.word(p),
+                                    _ => Some(((p.0, 0), (p.0, u16::MAX))),
+                                }
+                            }
+                            None => a.msel = Some((x, y, x, y)),
+                        }
                         a.seld = true;
+                        a.my = (x, y);
                     }
                     MouseEventKind::Drag(MouseButton::Left) if a.seld => {
-                        if let Some(s) = &mut a.msel {
+                        a.my = (m.column, m.row);
+                        if a.csel.is_some() {
+                            let h = a.cclamp(m.column, m.row);
+                            if let Some(s) = &mut a.csel {
+                                s.1 = h;
+                            }
+                        } else if let Some(s) = &mut a.msel {
                             s.2 = m.column;
                             s.3 = m.row;
                         }
                     }
                     MouseEventKind::Up(MouseButton::Left) if a.seld => {
                         a.seld = false;
-                        match a.msel {
-                            Some((x0, y0, x1, y1)) if (x0, y0) == (x1, y1) => {
-                                a.msel = None;
+                        if let Some((p0, p1)) = a.csel {
+                            if p0 == p1 && a.lc.3 == 1 {
+                                a.csel = None;
                                 a.click(m.column, m.row);
-                            }
-                            Some(s) => {
-                                let t = a.txt.borrow().as_ref().map(|b| seltext(b, s)).unwrap_or_default();
+                            } else {
+                                let t = a.ctext();
                                 if t.trim().is_empty() {
-                                    a.msel = None;
+                                    a.csel = None;
                                 } else {
-                                    copy(&t);
-                                    a.toast("copied");
+                                    let n = t.chars().count();
+                                    let sys = copy(&t);
+                                    a.clip = t;
+                                    a.toast(if sys { format!("copied {n} chars") } else { format!("copied {n} chars · no wl-copy/xclip{}", if rclick() { ", right-click pastes here" } else { "" }) });
                                 }
                             }
-                            None => {}
+                        } else {
+                            match a.msel {
+                                Some((x0, y0, x1, y1)) if (x0, y0) == (x1, y1) => {
+                                    a.msel = None;
+                                    a.click(m.column, m.row);
+                                }
+                                Some(s) => {
+                                    let t = a.txt.borrow().as_ref().map(|b| seltext(b, s)).unwrap_or_default();
+                                    if t.trim().is_empty() {
+                                        a.msel = None;
+                                    } else {
+                                        copy(&t);
+                                        a.toast("copied");
+                                    }
+                                }
+                                None => {}
+                            }
                         }
                     }
                     // alt + wheel: up more solid, down more see-through (ctrl + wheel is the terminal's zoom)
                     MouseEventKind::ScrollUp if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(false, false),
                     MouseEventKind::ScrollDown if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(true, false),
+                    MouseEventKind::Down(MouseButton::Right) if rclick() && a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
+                        a.msel = None;
+                        // same as ctrl+v (images and copied files attach), with noname's own copy
+                        // as fallback when there is no clipboard tool
+                        a.clipv_any();
+                    }
                     MouseEventKind::ScrollUp => {
                         a.msel = None;
                         a.scr = (a.scr + 3).min(a.smax.get())
@@ -2356,6 +2528,22 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 break;
             }
         }
+        if a.seld && a.csel.is_some() {
+            let (yt, n, _, _) = a.cg.get();
+            let y = a.my.1;
+            let out = y < yt || (n > 0 && (y - yt) as usize >= n);
+            if y < yt && a.scr < a.smax.get() {
+                a.scr += 1;
+            } else if out && y >= yt && a.scr > 0 {
+                a.scr -= 1;
+            }
+            if out {
+                let h = a.cclamp(a.my.0, a.my.1);
+                if let Some(s) = &mut a.csel {
+                    s.1 = h;
+                }
+            }
+        }
         if let Ok(cy) = std::env::var("NONAME_BGCYCLE") {
             let v: Vec<&str> = cy.split(',').collect();
             if a.t % 30 == 0 && !v.is_empty() {
@@ -2363,8 +2551,38 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             }
         }
         a.step();
+        if std::env::var("NONAME_MOCK").is_err() {
+            let sid = a.session_id();
+            if let Ok(mut s) = SID.lock() {
+                if *s != sid {
+                    *s = sid;
+                }
+            }
+        }
     }
-    Ok(())
+    // give the terminal back before stopping claude (that can take a second), so a
+    // second ctrl+c or mouse movement in that time does not land in a half-restored screen
+    let _ = restore();
+    Ok(if std::env::var("NONAME_MOCK").is_ok() { String::new() } else { a.session_id() })
+}
+
+/// Session id for the exit message, also when noname is ended by a signal.
+static SID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Signal handler (ctrl+c as a real SIGINT, SIGTERM, terminal closed): restore the
+/// terminal first, otherwise mouse tracking stays on and the shell fills with mouse codes.
+fn bye() {
+    // hold stdout until the process exits, so the drawing loop cannot paint over the shell
+    let o = io::stdout();
+    let _g = o.lock();
+    let _ = restore();
+    sys::opacity_back();
+    if let Ok(s) = SID.lock() {
+        if !s.is_empty() {
+            println!("resume this session:  noname -r {s}");
+        }
+    }
+    live::killall();
 }
 
 fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
@@ -2372,7 +2590,7 @@ fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>) {
+fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>, t: Option<&ratatui::buffer::Buffer>) {
     let Some(s) = s else { return };
     if (s.0, s.1) == (s.2, s.3) {
         return;
@@ -2384,6 +2602,9 @@ fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>) {
         let xb = if y == y1 { x1 } else { ar.width.saturating_sub(1) };
         for x in xa..=xb.min(ar.width.saturating_sub(1)) {
             let c = &mut b[(x, y)];
+            if let Some(t) = t.filter(|t| t.area == ar) {
+                *c = t[(x, y)].clone();
+            }
             c.set_style(c.style().add_modifier(ratatui::style::Modifier::REVERSED));
         }
     }
@@ -2411,6 +2632,10 @@ fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
         }
         ls.push(l.trim_end().to_string());
     }
+    tidy(ls)
+}
+
+fn tidy(ls: Vec<String>) -> String {
     let ind = ls.iter().skip(1).filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
     let mut o: Vec<String> = ls.iter().enumerate().map(|(i, l)| if i == 0 { l.trim_start().to_string() } else { l.get(ind.min(l.len())..).unwrap_or("").to_string() }).collect();
     while o.last().is_some_and(|l| l.is_empty()) {
@@ -2419,10 +2644,10 @@ fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
     o.join("\n")
 }
 
-fn copy(t: &str) {
+fn copy(t: &str) -> bool {
     let _ = write!(io::stdout(), "\x1b]52;c;{}\x07", img::b64(t.as_bytes()));
     let _ = io::stdout().flush();
-    sys::setclip(t);
+    sys::setclip(t)
 }
 
 fn cur_label(q: &Option<Qa>, j: usize) -> String {
@@ -2506,6 +2731,27 @@ pub fn modeidx(s: &str) -> Option<usize> {
     }
 }
 
+static RCLICK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+pub fn rclick() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut m = RCLICK.load(Relaxed);
+    if m == u8::MAX {
+        m = (std::fs::read_to_string(sys::cfgfile("rclick")).unwrap_or_default().trim() == "on") as u8;
+        RCLICK.store(m, Relaxed);
+    }
+    m == 1
+}
+
+pub fn setrclick(on: bool) {
+    RCLICK.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+    let f = sys::cfgfile("rclick");
+    if let Some(d) = std::path::Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, if on { "on" } else { "off" });
+}
+
 pub fn defmode() -> Option<usize> {
     std::fs::read_to_string(modefile()).ok().and_then(|x| modeidx(&x))
 }
@@ -2530,14 +2776,26 @@ fn editor(s: &str) -> Option<String> {
     let _ = enable_raw_mode();
     let mut out = io::stdout();
     let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
+    // push the title again too: restore() popped it, and pops it once more on exit
+    let _ = write!(out, "\x1b[22;0t");
     let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
+    TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
     let r = if ok { std::fs::read_to_string(&f).ok() } else { None };
     let _ = std::fs::remove_file(&f);
     r
 }
 
+/// True while noname has the terminal (raw mode, alternate screen, pushed title and keys).
+static TERM_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Gives the terminal back. Runs once per take-over: a second call (end of the loop, then
+/// run(), a signal or a panic) does nothing, so the title and keyboard stacks of the
+/// shell around noname are not popped twice.
 fn restore() -> io::Result<()> {
+    if !TERM_ON.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     let mut o = io::stdout();
     let _ = execute!(o, PopKeyboardEnhancementFlags);
     let _ = execute!(o, ratatui::crossterm::event::DisableBracketedPaste);
@@ -2644,13 +2902,18 @@ fn hex(c: Color) -> Option<String> {
 
 fn css(c: &ratatui::buffer::Cell) -> String {
     let mut s = String::new();
-    if let Some(h) = hex(c.fg) {
+    let m = c.modifier;
+    let (fg, bg) = if m.contains(Modifier::REVERSED) {
+        (if c.bg == Color::Reset { pal::BASE() } else { c.bg }, if c.fg == Color::Reset { pal::FG() } else { c.fg })
+    } else {
+        (c.fg, c.bg)
+    };
+    if let Some(h) = hex(fg) {
         s += &format!("color:{h};");
     }
-    if let Some(h) = hex(c.bg) {
+    if let Some(h) = hex(bg) {
         s += &format!("background:{h};");
     }
-    let m = c.modifier;
     if m.contains(Modifier::BOLD) {
         s += "font-weight:700;";
     }
