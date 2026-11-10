@@ -900,6 +900,7 @@ impl App {
             ("title", LAYOUT[3].1[lay(3)].into()),
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("location", LAYOUT[5].1[lay(5)].into()),
+            ("right-click paste", if rclick() { "on" } else { "off" }.into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -1478,6 +1479,11 @@ impl App {
                         let j = sel - 7;
                         let n = LAYOUT[j].1.len();
                         setlay(j, (lay(j) + 1) % n);
+                    }
+                    13 => {
+                        let on = !rclick();
+                        setrclick(on);
+                        self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
                     }
                     _ => self.upcheck(true),
                 },
@@ -2279,13 +2285,13 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                                     let n = t.chars().count();
                                     let sys = copy(&t);
                                     a.clip = t;
-                                    a.toast(if sys { format!("copied {n} chars") } else { format!("copied {n} chars · no wl-copy/xclip, right-click pastes here") });
+                                    a.toast(if sys { format!("copied {n} chars") } else { format!("copied {n} chars · no wl-copy/xclip{}", if rclick() { ", right-click pastes here" } else { "" }) });
                                 }
                             }
                             None => {}
                         }
                     }
-                    MouseEventKind::Down(MouseButton::Right) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
+                    MouseEventKind::Down(MouseButton::Right) if rclick() && a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
                         a.msel = None;
                         // same as ctrl+v (images and copied files attach), with noname's own copy
                         // as fallback when there is no clipboard tool
@@ -2455,6 +2461,27 @@ pub fn modeidx(s: &str) -> Option<usize> {
         "bypass" | "bypasspermissions" | "yolo" => Some(3),
         _ => None,
     }
+}
+
+static RCLICK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+pub fn rclick() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut m = RCLICK.load(Relaxed);
+    if m == u8::MAX {
+        m = (std::fs::read_to_string(sys::cfgfile("rclick")).unwrap_or_default().trim() == "on") as u8;
+        RCLICK.store(m, Relaxed);
+    }
+    m == 1
+}
+
+pub fn setrclick(on: bool) {
+    RCLICK.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+    let f = sys::cfgfile("rclick");
+    if let Some(d) = std::path::Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, if on { "on" } else { "off" });
 }
 
 pub fn defmode() -> Option<usize> {
