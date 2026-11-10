@@ -92,6 +92,17 @@ pub mod pal {
 
 
 pub const MODELS: [&str; 4] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1"];
+/// Window opacity steps in the /noname menu, in percent.
+pub const OPAC: [u8; 8] = [100, 90, 80, 70, 60, 50, 40, 30];
+
+/// Opacity when nothing is set in the /noname menu.
+pub const OPAC_DEFAULT: u8 = 100;
+
+/// noname's window opacity setting in percent (100 = leave the terminal alone).
+pub fn opac() -> u8 {
+    std::fs::read_to_string(sys::cfgfile("opacity")).ok().and_then(|s| s.trim().parse().ok()).filter(|v| OPAC.contains(v)).unwrap_or(OPAC_DEFAULT)
+}
+
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 pub const MID_ALL: [(&str, &str); 4] = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1")];
 pub const MODES: [&str; 4] = ["default", "plan", "auto", "bypass"];
@@ -922,6 +933,7 @@ impl App {
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("location", LAYOUT[5].1[lay(5)].into()),
             ("right-click paste", if rclick() { "on" } else { "off" }.into()),
+            ("opacity", format!("{}%", opac())),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -940,6 +952,47 @@ impl App {
             self.lmode();
         }
         self.toast(format!("default permission  {}", MODES[i]));
+    }
+
+    /// One step more see-through (`less`) or more solid; 100% gives the terminal its own value back.
+    pub fn setopac(&mut self, less: bool) {
+        self.opacstep(less, true);
+    }
+
+    /// One opacity step; `wrap` goes from 30% round to 100% (menu), without it the ends hold (alt + wheel).
+    pub fn opacstep(&mut self, less: bool, wrap: bool) {
+        let n = OPAC.len();
+        let cur = OPAC.iter().position(|x| *x == opac()).unwrap_or(0);
+        let i = match (less, wrap) {
+            (true, true) => (cur + 1) % n,
+            (false, true) => (cur + n - 1) % n,
+            (true, false) => (cur + 1).min(n - 1),
+            (false, false) => cur.saturating_sub(1),
+        };
+        if i == cur {
+            self.toast(format!("opacity  {}%", OPAC[i]));
+            return;
+        }
+        let v = OPAC[i];
+        let ok = if std::env::var("NONAME_MOCK").is_ok() {
+            true
+        } else if v == 100 {
+            sys::opacity_restore();
+            true
+        } else {
+            sys::opacity_apply(v)
+        };
+        if !ok {
+            self.toast("opacity works in kitty, Alacritty, Ptyxis and GNOME Terminal; set it in your terminal's own settings");
+            return;
+        }
+        let f = sys::cfgfile("opacity");
+        if let Some(d) = std::path::Path::new(&f).parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&f, v.to_string());
+        let sc = sys::opacity_scope();
+        self.toast(if v == 100 || sc.is_empty() { format!("opacity  {v}%") } else { format!("opacity  {v}%  ({sc})") });
     }
 
     pub fn settheme(&mut self, i: usize) {
@@ -1551,6 +1604,7 @@ impl App {
                     let n = LAYOUT[j].1.len();
                     setlay(j, (lay(j) + n - 1) % n);
                 }
+                KeyCode::Left if sel == 14 => self.setopac(false),
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
                     0 if upd::managed().is_some() => {}
                     0 => {
@@ -1586,6 +1640,7 @@ impl App {
                         setrclick(on);
                         self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
                     }
+                    14 => self.setopac(true),
                     _ => self.upcheck(true),
                 },
                 _ => {}
@@ -2292,11 +2347,20 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |p| {
         let _ = restore();
+        sys::opacity_back();
         hook(p)
     }));
+    if std::env::var("NONAME_MOCK").is_err() {
+        if opac() < 100 {
+            sys::opacity_apply(opac());
+        } else {
+            sys::opacity_back();
+        }
+    }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
     let r = lp(&mut term, &mut v);
     restore()?;
+    sys::opacity_back();
     match r {
         Err(e) => {
             eprintln!("noname: {e}");
@@ -2439,6 +2503,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                             }
                         }
                     }
+                    // alt + wheel: up more solid, down more see-through (ctrl + wheel is the terminal's zoom)
+                    MouseEventKind::ScrollUp if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(false, false),
+                    MouseEventKind::ScrollDown if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(true, false),
                     MouseEventKind::Down(MouseButton::Right) if rclick() && a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
                         a.msel = None;
                         // same as ctrl+v (images and copied files attach), with noname's own copy
@@ -2509,6 +2576,7 @@ fn bye() {
     let o = io::stdout();
     let _g = o.lock();
     let _ = restore();
+    sys::opacity_back();
     if let Ok(s) = SID.lock() {
         if !s.is_empty() {
             println!("resume this session:  noname -r {s}");

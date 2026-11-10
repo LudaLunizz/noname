@@ -301,3 +301,188 @@ pub fn setclip(t: &str) -> bool {
     true
 }
 
+#[derive(Clone)]
+enum Tm {
+    Px(String),
+    Gt(String),
+    Kt(String),
+    Al(String),
+}
+
+fn tm() -> Option<Tm> {
+    static T: std::sync::OnceLock<Option<Tm>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let e = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let ok = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if let Some(p) = e("PTYXIS_PROFILE").filter(|p| ok(p)) {
+            if which("gsettings").is_some() {
+                return Some(Tm::Px(p));
+            }
+        }
+        if let Some(k) = e("KITTY_WINDOW_ID").filter(|k| k.chars().all(|c| c.is_ascii_digit())) {
+            if e("TMUX").is_none() || (e("KITTY_LISTEN_ON").is_some() && which("kitten").is_some()) {
+                return Some(Tm::Kt(k));
+            }
+        }
+        if let Some(w) = e("ALACRITTY_WINDOW_ID").filter(|w| w.chars().all(|c| c.is_ascii_digit())) {
+            if e("ALACRITTY_SOCKET").is_some() && which("alacritty").is_some() {
+                return Some(Tm::Al(w));
+            }
+        }
+        if e("GNOME_TERMINAL_SERVICE").is_some() && which("gsettings").is_some() {
+            let id = gs(&["get", "org.gnome.Terminal.ProfilesList", "default"])?.trim_matches('\'').to_string();
+            if !id.is_empty() && ok(&id) {
+                return Some(Tm::Gt(id));
+            }
+        }
+        None
+    })
+    .clone()
+}
+
+fn gs(a: &[&str]) -> Option<String> {
+    let o = Command::new("gsettings").args(a).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+fn gpath(t: &Tm) -> String {
+    match t {
+        Tm::Px(p) => format!("org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{p}/"),
+        Tm::Gt(p) => format!("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:{p}/"),
+        _ => String::new(),
+    }
+}
+
+fn gget(t: &Tm) -> Option<String> {
+    let p = gpath(t);
+    match t {
+        Tm::Px(_) => gs(&["get", &p, "opacity"]),
+        Tm::Gt(_) => Some(format!("{} {}", gs(&["get", &p, "use-transparent-background"])?, gs(&["get", &p, "background-transparency-percent"])?)),
+        _ => None,
+    }
+}
+
+fn gput(t: &Tm, v: &str) -> bool {
+    let p = gpath(t);
+    match t {
+        Tm::Px(_) => gs(&["set", &p, "opacity", v]).is_some(),
+        Tm::Gt(_) => {
+            let Some((on, pc)) = v.split_once(' ') else { return false };
+            gs(&["set", &p, "use-transparent-background", on]).is_some() && gs(&["set", &p, "background-transparency-percent", pc]).is_some()
+        }
+        _ => false,
+    }
+}
+
+fn kt(id: &str, v: f32, tog: bool) -> bool {
+    let to = std::env::var("KITTY_LISTEN_ON").unwrap_or_default();
+    if !to.is_empty() && which("kitten").is_some() {
+        let mut c = Command::new("kitten");
+        c.args(["@", "--to", &to, "set-background-opacity", "-m", &format!("id:{id}")]);
+        if tog {
+            c.arg("--toggle");
+        }
+        c.arg(format!("{v:.2}"));
+        return c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    }
+    use std::io::Write;
+    let j = format!(r#"{{"cmd":"set-background-opacity","version":[0,14,2],"no_response":true,"payload":{{"opacity":{v:.2},"match_window":"id:{id}","toggle":{tog}}}}}"#);
+    let mut o = std::io::stdout();
+    write!(o, "\x1bP@kitty-cmd{j}\x1b\\").and_then(|_| o.flush()).is_ok()
+}
+
+fn al(a: &[&str]) -> bool {
+    Command::new("alacritty").arg("msg").args(a).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
+static OPON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn origf(id: &str) -> String {
+    cfgfile(&format!("opacity-orig-{id}"))
+}
+
+fn others(want: &str) -> bool {
+    let me = std::process::id();
+    let Ok(rd) = std::fs::read_dir("/proc") else { return false };
+    rd.flatten().any(|e| {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { return false };
+        if pid == me || std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|c| c.trim() != "noname").unwrap_or(true) {
+            return false;
+        }
+        let Ok(env) = std::fs::read(format!("/proc/{pid}/environ")) else { return false };
+        let vs: Vec<&[u8]> = env.split(|b| *b == 0).collect();
+        let hit = vs.iter().any(|v| *v == want.as_bytes() || (want.ends_with('=') && v.starts_with(want.as_bytes())));
+        hit && !vs.iter().any(|v| v.starts_with(b"NONAME_MOCK="))
+    })
+}
+
+pub fn opacity_scope() -> &'static str {
+    match tm() {
+        Some(Tm::Px(_)) | Some(Tm::Gt(_)) => "all tabs with this profile",
+        Some(Tm::Kt(_)) if std::env::var("KITTY_LISTEN_ON").is_ok_and(|v| !v.is_empty()) => "this kitty window",
+        Some(Tm::Kt(_)) => "this kitty window, needs allow_remote_control and dynamic_background_opacity",
+        Some(Tm::Al(_)) => "this window",
+        None => "",
+    }
+}
+
+pub fn opacity_apply(pct: u8) -> bool {
+    let Some(t) = tm() else { return false };
+    let v = pct as f32 / 100.0;
+    let ok = match &t {
+        Tm::Px(id) | Tm::Gt(id) => {
+            let f = origf(id);
+            if std::fs::metadata(&f).is_err() {
+                let Some(cur) = gget(&t) else { return false };
+                if let Some(d) = std::path::Path::new(&f).parent() {
+                    let _ = std::fs::create_dir_all(d);
+                }
+                let _ = std::fs::write(&f, cur);
+            }
+            match t {
+                Tm::Px(_) => gput(&t, &format!("{v:.2}")),
+                _ => gput(&t, &format!("true {}", 100 - pct.min(100))),
+            }
+        }
+        Tm::Kt(id) => kt(id, v, false),
+        Tm::Al(id) => al(&["config", "-w", id, &format!("window.opacity={v:.2}")]),
+    };
+    if ok {
+        OPON.store(pct, std::sync::atomic::Ordering::SeqCst);
+    }
+    ok
+}
+
+pub fn opacity_restore() {
+    let Some(t) = tm() else { return };
+    let p = OPON.swap(0, std::sync::atomic::Ordering::SeqCst);
+    match &t {
+        Tm::Px(id) | Tm::Gt(id) => {
+            let f = origf(id);
+            if let Ok(s) = std::fs::read_to_string(&f) {
+                if gput(&t, s.trim()) {
+                    let _ = std::fs::remove_file(&f);
+                }
+            }
+        }
+        Tm::Kt(id) if p > 0 => {
+            kt(id, p as f32 / 100.0, true);
+        }
+        Tm::Al(id) if p > 0 => {
+            al(&["config", "-w", id, "--reset"]);
+        }
+        _ => {}
+    }
+}
+
+pub fn opacity_back() {
+    let sh = match tm() {
+        Some(Tm::Px(id)) => others(&format!("PTYXIS_PROFILE={id}")),
+        Some(Tm::Gt(_)) => others("GNOME_TERMINAL_SERVICE="),
+        Some(_) => false,
+        None => return,
+    };
+    if !sh {
+        opacity_restore();
+    }
+}
