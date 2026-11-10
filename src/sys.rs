@@ -225,6 +225,35 @@ pub fn open(path: &str, line: &str) {
     let _ = c.spawn();
 }
 
+/// Opens a web link in the default browser (NONAME_OPEN is for files, so it is not used here).
+pub fn open_url(url: &str) {
+    if !(url.starts_with("https://") || url.starts_with("http://")) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return;
+    }
+    let mut c = if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(windows) {
+        // not `cmd /c start`: cmd would read & | ^ in the url as its own syntax
+        // (and run what follows), while the link text comes from the model
+        let mut c = Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
+    let _ = c.spawn();
+}
+
 pub fn month() -> i32 {
     #[cfg(unix)]
     unsafe {
@@ -241,6 +270,13 @@ pub fn month() -> i32 {
     }
 }
 
+/// xclip goes through XWayland and needs no window focus. wl-copy/wl-paste on GNOME (no data-control
+/// protocol) open a hidden window and wait for focus, which mutter does not always give: then they hang.
+/// So when an X display and xclip are both there, xclip is used first.
+pub fn xclip_first() -> bool {
+    std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && which("xclip").is_some()
+}
+
 /// Puts text on the system clipboard. Returns false when no clipboard tool was found,
 /// so the caller can say that only the terminal's own clipboard (OSC 52) was tried.
 pub fn setclip(t: &str) -> bool {
@@ -248,7 +284,7 @@ pub fn setclip(t: &str) -> bool {
         Some(("pbcopy", &[]))
     } else if cfg!(windows) {
         None
-    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-copy").is_some() {
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-copy").is_some() && !xclip_first() {
         Some(("wl-copy", &[]))
     } else if which("xclip").is_some() {
         Some(("xclip", &["-selection", "clipboard"]))

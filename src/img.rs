@@ -258,7 +258,7 @@ fn clip_win(txt: bool) -> Clip {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn clip() -> Clip {
-    let wl = std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::sys::which("wl-paste").is_some();
+    let wl = std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::sys::which("wl-paste").is_some() && !crate::sys::xclip_first();
     if wl {
         let Ok(ty) = run(Command::new("wl-paste").arg("--list-types")) else { return Clip::Empty };
         let ty = ty.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
