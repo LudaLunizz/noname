@@ -2248,6 +2248,7 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
         return dump(&mut v, &args[2..]);
     }
     enable_raw_mode()?;
+    TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let _ = write!(out, "\x1b[22;0t");
@@ -2261,14 +2262,22 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
     let r = lp(&mut term, &mut v);
     restore()?;
-    if let Err(e) = &r {
-        eprintln!("noname: {e}");
-        std::process::exit(1);
+    match r {
+        Err(e) => {
+            eprintln!("noname: {e}");
+            std::process::exit(1);
+        }
+        Ok(sid) => {
+            if !sid.is_empty() {
+                println!("resume this session:  noname -r {sid}");
+            }
+            Ok(())
+        }
     }
-    r
 }
 
-fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<()> {
+/// Runs the UI; returns the Claude session id (empty when there is none) so it can be shown after exit.
+fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cx = args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
     let args: Vec<String> = args.into_iter().filter(|x| x != "--codex").collect();
@@ -2280,7 +2289,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         App::live(args)?
     };
     let mut lt = String::new();
-    sys::on_close(live::killall);
+    sys::on_close(bye);
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
         a.upcheck(false);
@@ -2432,8 +2441,37 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             }
         }
         a.step();
+        if std::env::var("NONAME_MOCK").is_err() {
+            let sid = a.session_id();
+            if let Ok(mut s) = SID.lock() {
+                if *s != sid {
+                    *s = sid;
+                }
+            }
+        }
     }
-    Ok(())
+    // give the terminal back before stopping claude (that can take a second), so a
+    // second ctrl+c or mouse movement in that time does not land in a half-restored screen
+    let _ = restore();
+    Ok(if std::env::var("NONAME_MOCK").is_ok() { String::new() } else { a.session_id() })
+}
+
+/// Session id for the exit message, also when noname is ended by a signal.
+static SID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Signal handler (ctrl+c as a real SIGINT, SIGTERM, terminal closed): restore the
+/// terminal first, otherwise mouse tracking stays on and the shell fills with mouse codes.
+fn bye() {
+    // hold stdout until the process exits, so the drawing loop cannot paint over the shell
+    let o = io::stdout();
+    let _g = o.lock();
+    let _ = restore();
+    if let Ok(s) = SID.lock() {
+        if !s.is_empty() {
+            println!("resume this session:  noname -r {s}");
+        }
+    }
+    live::killall();
 }
 
 fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
@@ -2606,14 +2644,26 @@ fn editor(s: &str) -> Option<String> {
     let _ = enable_raw_mode();
     let mut out = io::stdout();
     let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
+    // push the title again too: restore() popped it, and pops it once more on exit
+    let _ = write!(out, "\x1b[22;0t");
     let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
+    TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
     let r = if ok { std::fs::read_to_string(&f).ok() } else { None };
     let _ = std::fs::remove_file(&f);
     r
 }
 
+/// True while noname has the terminal (raw mode, alternate screen, pushed title and keys).
+static TERM_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Gives the terminal back. Runs once per take-over: a second call (end of the loop, then
+/// run(), a signal or a panic) does nothing, so the title and keyboard stacks of the
+/// shell around noname are not popped twice.
 fn restore() -> io::Result<()> {
+    if !TERM_ON.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     let mut o = io::stdout();
     let _ = execute!(o, PopKeyboardEnhancementFlags);
     let _ = execute!(o, ratatui::crossterm::event::DisableBracketedPaste);
