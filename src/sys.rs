@@ -241,12 +241,19 @@ pub fn month() -> i32 {
     }
 }
 
+/// xclip goes through XWayland and needs no window focus. wl-copy/wl-paste on GNOME (no data-control
+/// protocol) open a hidden window and wait for focus, which mutter does not always give: then they hang.
+/// So when an X display and xclip are both there, xclip is used first.
+pub fn xclip_first() -> bool {
+    std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && which("xclip").is_some()
+}
+
 pub fn setclip(t: &str) {
     let c: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
         Some(("pbcopy", &[]))
     } else if cfg!(windows) {
         None
-    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-copy").is_some() {
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-copy").is_some() && !xclip_first() {
         Some(("wl-copy", &[]))
     } else if which("xclip").is_some() {
         Some(("xclip", &["-selection", "clipboard"]))
