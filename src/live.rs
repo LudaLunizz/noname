@@ -283,6 +283,20 @@ impl App {
         true
     }
 
+    /// Value of the model that `/model <q>` names: exact value, exact display name, or a unique-enough prefix/word such as "opus".
+    fn pickmodel(&self, q: &str) -> Option<String> {
+        let nm = |s: &str| s.to_lowercase().replace(['-', '.'], " ").trim_start_matches("claude ").to_string();
+        let q = nm(q);
+        if q.is_empty() {
+            return None;
+        }
+        let by = |f: &dyn Fn(&(String, String, String, Vec<String>)) -> bool| self.models.iter().find(|m| f(m)).map(|m| m.0.clone());
+        by(&|m| nm(&m.0) == q)
+            .or_else(|| by(&|m| nm(&m.1) == q))
+            .or_else(|| by(&|m| nm(&m.1).split(' ').next() == Some(q.as_str())))
+            .or_else(|| by(&|m| nm(&m.0).starts_with(&q) || nm(&m.1).starts_with(&q)))
+    }
+
     pub(crate) fn setmodel(&mut self, v: &str) {
         let d = self.models.iter().find(|m| m.0 == v).map(|m| m.1.clone()).unwrap_or_else(|| mnm(v));
         if let Some(i) = MID.iter().position(|x| v.starts_with(x)) {
@@ -578,6 +592,11 @@ impl App {
                 }
             }
             "model" if arg.is_empty() => self.modelpicker(),
+            "model" if self.pickmodel(arg.trim()).is_some() => {
+                // switch right here, so the name on screen changes at once instead of at the next turn
+                let v = self.pickmodel(arg.trim()).unwrap_or_default();
+                self.setmodel(&v);
+            }
             "effort" if arg.is_empty() => self.effortpicker(),
             "effort" => self.seteffort(arg.trim()),
             "mcp" if arg.is_empty() => {
@@ -1065,6 +1084,14 @@ impl App {
                 self.se(&e["event"])
             }
             "assistant" => {
+                // the model that really answered; keeps the name on screen true whatever changed it
+                let m = sv(&e["message"], "model");
+                if e["parent_tool_use_id"].is_null() && m.starts_with("claude-") {
+                    if let Some(i) = MID.iter().position(|x| m.starts_with(x)) {
+                        self.model = i;
+                    }
+                    self.mname = mnm(&m);
+                }
                 for c in e["message"]["content"].as_array().cloned().unwrap_or_default() {
                     if c["type"] == "tool_use" {
                         self.tuse(&c);
@@ -1579,5 +1606,29 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[test]
+    fn model_command_names_resolve() {
+        let a = App::new();
+        for (q, want) in [("opus", "claude-opus-5-5"), ("Opus 5.5", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5-5"), ("haiku-5-5", "claude-haiku-5-5"), ("claude-fable-5-1", "claude-fable-5-1")] {
+            assert_eq!(a.pickmodel(q).as_deref(), Some(want), "{q}");
+        }
+        assert_eq!(a.pickmodel("nonsense"), None);
+        assert_eq!(a.pickmodel(""), None);
+    }
+
+    #[test]
+    fn setmodel_changes_the_name_at_once() {
+        let mut a = App::new();
+        a.setmodel("claude-opus-5-5");
+        assert_eq!(a.mname, "opus-5.5");
+        a.setmodel("claude-haiku-5-5");
+        assert_eq!(a.mname, "haiku-5.5");
     }
 }
