@@ -204,7 +204,7 @@ pub fn clip() -> Clip {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn clip() -> Clip {
-    let wl = std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::sys::which("wl-paste").is_some();
+    let wl = std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::sys::which("wl-paste").is_some() && !crate::sys::xclip_first();
     if wl {
         let ty = out(Command::new("wl-paste").arg("--list-types")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         if let Some(t) = pick(&ty) {
