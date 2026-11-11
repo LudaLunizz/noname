@@ -2965,7 +2965,7 @@ fn bye() {
     sys::opacity_back();
     if let Ok(s) = SID.lock() {
         if !s.is_empty() {
-            println!("resume this session:  noname -r {s}");
+            let _ = writeln!(io::stdout(), "resume this session:  noname -r {s}");
         }
     }
     live::killall();

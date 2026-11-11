@@ -147,7 +147,15 @@ pub fn on_close(f: fn()) {
     if let Ok(mut sg) = signal_hook::iterator::Signals::new([SIGHUP, SIGTERM, SIGINT]) {
         std::thread::spawn(move || {
             if sg.forever().next().is_some() {
-                f();
+                std::thread::spawn(move || {
+                    let _ = std::panic::catch_unwind(f);
+                    exit_now();
+                });
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    exit_now();
+                });
+                let _ = sg.forever().next();
                 exit_now();
             }
         });
