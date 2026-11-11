@@ -7,14 +7,14 @@
 /_/ /_/\____/_/ /_/\__,_/_/ /_/ /_/\___/
 </pre>
 
-**A quiet terminal front end for Claude Code**
+**A quiet terminal UI for Claude Code, written in Rust**
 
 [![Rust](https://img.shields.io/badge/rust-2024-b497ff?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Claude Code](https://img.shields.io/badge/engine-Claude%20Code-d0a9ff?style=flat-square)](https://claude.com/claude-code)
 [![kitty](https://img.shields.io/badge/terminal-kitty-a6e3a1?style=flat-square)](https://sw.kovidgoyal.net/kitty)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-f38ba8?style=flat-square)](LICENSE)
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.gif"><source media="(prefers-color-scheme: light)" srcset="assets/demo-light.gif"><img src="assets/demo-dark.gif" width="860"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.gif"><source media="(prefers-color-scheme: light)" srcset="assets/demo-light.gif"><img src="assets/demo-dark.gif" width="860" alt="noname terminal UI for Claude Code: streaming answers, tool calls and an animated starfield background"></picture>
 
 </div>
 
@@ -22,12 +22,14 @@
 
 ## About
 
-noname replaces the interface of Claude Code, not the engine. `claude` runs underneath, so your subscription, plugins, skills, MCP servers and hooks keep working. Made for kitty with a transparent background, works in any truecolor terminal and in Windows Terminal.
+noname is a terminal UI (TUI) for [Claude Code](https://claude.com/claude-code), built in Rust with ratatui. It replaces the interface of Claude Code, not the engine. `claude` runs underneath, so your subscription, plugins, skills, MCP servers and hooks keep working. Made for kitty with a transparent background, works in any truecolor terminal and in Windows Terminal.
 
 - streaming text, thinking and tools, diffs that write themselves in
 - inline permissions and questions, rewind with `esc esc`, `/btw` side questions
 - live context and limit bars, cost under every answer
-- themes, animated backgrounds, self updates
+- themes (default, dracula, tokyo-night, catppuccin mocha), animated backgrounds, self updates
+- image paste, `@` file mentions, background shells and subagents, `/diff`, `/mcp`, `/resume`
+- Linux, macOS and Windows; optional Codex engine with `--codex`
 
 ## Install
 
