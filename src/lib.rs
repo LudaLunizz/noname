@@ -290,6 +290,11 @@ pub struct App {
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub pst: Vec<String>,
+    und: Vec<(String, usize)>,
+    red: Vec<(String, usize)>,
+    uk: bool,
+    unre: bool,
+    drf: Option<String>,
     pub ig: Cell<(u16, u16, usize)>,
     pub tasks: Vec<Task>,
     /// last text copied with a mouse selection; right-click pastes it when no clipboard tool is there
@@ -544,6 +549,11 @@ impl App {
             le: 0,
             imgs: vec![],
             pst: vec![],
+            und: vec![],
+            red: vec![],
+            uk: false,
+            unre: false,
+            drf: None,
             ig: Cell::new((0, 0, 0)),
             tasks: vec![],
             clip: String::new(),
@@ -1099,7 +1109,7 @@ impl App {
             "context" => self.bs.push(B::Sys(format!("context  {:.0}% of 1M used  ·  system 8%  ·  tools 6%  ·  messages {:.0}%", self.ctx, self.ctx - 14.0))),
             "usage" => self.bs.push(B::Sys(format!("usage  5h {:.0}%  ·  7d {:.0}%  ·  opus 7d 2%", self.h5, self.d7))),
             "resume" => self.bs.push(B::Sys("resume  (mock) 12 older sessions in ~/projects/rusttok".into())),
-            "help" => self.bs.push(B::Sys("enter send  shift+enter newline  esc stop  ctrl+o details  ctrl+t todos  shift+tab mode".into())),
+            "help" => self.bs.push(B::Sys("enter send  shift+enter newline  esc stop  ctrl+o details or unfold paste  ctrl+z undo  ctrl+y redo  ctrl+t todos  shift+tab mode".into())),
             _ => self.bs.push(B::Sys(format!("unknown command  /{c}"))),
         }
     }
@@ -1444,6 +1454,11 @@ impl App {
     }
 
     pub fn paste(&mut self, s: String) {
+        if self.rs.is_none() {
+            self.snap((self.inp.clone(), self.cur));
+            self.red.clear();
+            self.uk = false;
+        }
         let v = img::paths(&s);
         if !v.is_empty() {
             self.files(v);
@@ -1614,6 +1629,78 @@ impl App {
     }
 
     pub fn key(&mut self, k: KeyEvent) {
+        let b = (self.inp.clone(), self.cur);
+        let typ = matches!(k.code, KeyCode::Char(c) if !k.modifiers.intersects(Km::CONTROL | Km::ALT) && !c.is_whitespace());
+        self.key0(k);
+        if std::mem::take(&mut self.unre) || matches!(k.code, KeyCode::Up | KeyCode::Down) {
+            self.uk = false;
+        } else if self.inp != b.0 {
+            if !(typ && self.uk) {
+                self.snap(b);
+            }
+            self.red.clear();
+            self.uk = typ;
+        } else if !typ {
+            self.uk = false;
+        }
+    }
+
+    fn snap(&mut self, b: (String, usize)) {
+        self.und.push(b);
+        if self.und.len() > 300 {
+            self.und.remove(0);
+        }
+    }
+
+    fn undo(&mut self, re: bool) {
+        let (f, t) = if re { (&mut self.red, &mut self.und) } else { (&mut self.und, &mut self.red) };
+        if let Some((s, c)) = f.pop() {
+            t.push((std::mem::take(&mut self.inp), self.cur));
+            self.inp = s;
+            self.cur = c.min(self.inp.chars().count());
+        }
+        self.unre = true;
+        self.sug = None;
+        self.ms = 0;
+    }
+
+    fn tokr(&self) -> Option<usize> {
+        let rest: String = self.inp.chars().skip(self.cur).take(48).collect();
+        atok(&rest).map(|(_, l)| self.cur + l)
+    }
+
+    fn unfold(&mut self) -> bool {
+        let cs: Vec<char> = self.inp.chars().collect();
+        let (a, b) = match (self.tokl(), self.tokr()) {
+            (_, Some(e)) => (self.cur, e),
+            (Some(o), None) => (o, self.cur),
+            _ => return false,
+        };
+        let t: String = cs[a..b].iter().collect();
+        let Some((k, _)) = ptok(&t).filter(|x| x.0 >= 1 && x.0 <= self.pst.len()) else { return false };
+        let x = self.pst[k - 1].clone();
+        let n = x.chars().count();
+        self.inp = cs[..a].iter().collect::<String>() + &x + &cs[b..].iter().collect::<String>();
+        self.cur = a + n;
+        true
+    }
+
+    fn vline(&self) -> Option<(usize, usize)> {
+        let w = self.ig.get().2;
+        if w == 0 {
+            return None;
+        }
+        let (st, en) = inlay(&self.inp, w);
+        let cy = st.iter().rposition(|&a| a <= self.cur)?;
+        let cs: Vec<char> = self.inp.chars().collect();
+        let mut e = en[cy];
+        if cy + 1 < st.len() && st[cy + 1] == e && e > st[cy] && cs.get(e - 1) == Some(&' ') {
+            e -= 1;
+        }
+        Some((st[cy], e))
+    }
+
+    fn key0(&mut self, k: KeyEvent) {
         let ct = k.modifiers.contains(Km::CONTROL);
         if self.rw.is_some() && !(ct && k.code == KeyCode::Char('c')) {
             self.rwkey(k);
@@ -1822,7 +1909,12 @@ impl App {
                 } else if self.busy {
                     self.stop()
                 } else if !self.inp.is_empty() {
-                    self.inp.clear();
+                    let s = std::mem::take(&mut self.inp);
+                    if self.hist.last() != Some(&s) {
+                        self.hist.push(s);
+                    }
+                    self.hi = None;
+                    self.drf = None;
                     self.cur = 0
                 } else if dbl && !self.users().is_empty() {
                     self.rw = Some((self.users().len() - 1, None));
@@ -1838,6 +1930,10 @@ impl App {
                 }
             }
             KeyCode::Char(c) if !ct && self.ask.is_some() && self.inp.is_empty() && matches!(c, 'y' | 'n' | 'a') => self.answer(c),
+            KeyCode::Char('o') if ct && self.unfold() => {}
+            KeyCode::Char('z' | 'Z') if ct && (k.modifiers.contains(Km::SHIFT) || k.code == KeyCode::Char('Z')) => self.undo(true),
+            KeyCode::Char('z') if ct => self.undo(false),
+            KeyCode::Char('y') if ct => self.undo(true),
             KeyCode::Char('o') if ct => {
                 self.open = !self.open;
                 self.to = self.t
@@ -1910,38 +2006,47 @@ impl App {
                     self.inp.remove(i);
                 }
             }
+            KeyCode::Delete if self.tokr().is_some() => {
+                let e = self.tokr().unwrap_or(self.cur);
+                self.cut(self.cur, e)
+            }
             KeyCode::Delete => {
                 if self.cur < self.nch() {
                     let i = self.bi();
                     self.inp.remove(i);
                 }
             }
+            KeyCode::Left if self.tokl().is_some() => self.cur = self.tokl().unwrap_or(self.cur),
+            KeyCode::Right if self.tokr().is_some() => self.cur = self.tokr().unwrap_or(self.cur),
             KeyCode::Left => self.cur = self.cur.saturating_sub(1),
             KeyCode::Right => self.cur = (self.cur + 1).min(self.nch()),
-            KeyCode::Home => self.cur = 0,
-            KeyCode::End => self.cur = self.nch(),
+            KeyCode::Home => self.cur = self.vline().map(|x| x.0).filter(|&a| a != self.cur).unwrap_or(0),
+            KeyCode::End => self.cur = self.vline().map(|x| x.1).filter(|&e| e != self.cur).unwrap_or(self.nch()),
             KeyCode::Up if self.vmove(true) => {}
             KeyCode::Down if self.vmove(false) => {}
-            KeyCode::Up if !self.inp.contains('\n') => {
+            KeyCode::Up => {
                 if self.hist.is_empty() {
                     return;
                 }
                 let i = match self.hi {
-                    None => self.hist.len() - 1,
+                    None => {
+                        self.drf = Some(self.inp.clone());
+                        self.hist.len() - 1
+                    }
                     Some(i) => i.saturating_sub(1),
                 };
                 self.hi = Some(i);
                 self.inp = self.hist[i].clone();
                 self.cur = self.nch()
             }
-            KeyCode::Down if !self.inp.contains('\n') => {
+            KeyCode::Down => {
                 if let Some(i) = self.hi {
                     if i + 1 < self.hist.len() {
                         self.hi = Some(i + 1);
                         self.inp = self.hist[i + 1].clone();
                     } else {
                         self.hi = None;
-                        self.inp.clear();
+                        self.inp = self.drf.take().unwrap_or_default();
                     }
                     self.cur = self.nch()
                 }

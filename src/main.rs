@@ -765,7 +765,7 @@ impl V for V1 {
         let x0 = ar.x + (ar.width - w as u16) / 2;
         let iw = w - 2;
         let (il, (cx, cy)) = inwrap(&a.inp, a.cur, iw);
-        let ih = il.len().clamp(1, 8);
+        let ih = il.len().clamp(1, (ar.height as usize / 3).max(8));
         let mut extra: Vec<Line<'static>> = vec![];
         let mut bt: Vec<Line<'static>> = vec![];
         if let Some(b) = &a.btw {
@@ -1286,8 +1286,16 @@ impl V for V1 {
             let dn = il.len().saturating_sub(sk + ih);
             let hint: Vec<Span<'static>> = if j == sk && sk > 0 {
                 vec![Span::styled(format!("↑ {sk} "), st(FA()))]
-            } else if j + 1 == sk + ih && dn > 0 {
-                vec![Span::styled(format!("↓ {dn} "), st(FA()))]
+            } else if j + 1 == sk + ih && il.len() > ih {
+                let x = a.expand(&a.inp);
+                let n = x.chars().count();
+                let c = if n >= 1000 { format!("{:.1}k", n as f32 / 1000.0) } else { n.to_string() };
+                let mut v = vec![];
+                if dn > 0 {
+                    v.push(Span::styled(format!("↓ {dn}   "), st(FA())));
+                }
+                v.push(Span::styled(format!("{} lines · {c} chars ", x.lines().count()), st(FA())));
+                v
             } else {
                 vec![]
             };
