@@ -2770,11 +2770,13 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     }
     while !a.quit {
         a.cp.set(None);
+        let _ = ratatui::crossterm::queue!(io::stdout(), ratatui::crossterm::terminal::BeginSynchronizedUpdate, ratatui::crossterm::cursor::Hide);
         let cf = term.draw(|f| {
             v.draw(f, &a);
             let tx = a.txt.borrow();
             selhl(f.buffer_mut(), a.msel.or_else(|| a.cvis()), tx.as_ref());
         })?;
+        let _ = execute!(io::stdout(), ratatui::crossterm::terminal::EndSynchronizedUpdate);
         if let Ok(p) = std::env::var("NONAME_SHOT") {
             if p.contains("{}") {
                 if a.t % 3 == 0 {
