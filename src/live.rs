@@ -520,6 +520,8 @@ impl App {
         v.push(("theme".into(), crate::pal::THEMES.iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
         v.push(("background".into(), crate::bg::LIST.into()));
         v.push(("resume".into(), "pick an older session in this folder".into()));
+        v.retain(|x| x.0 != "copy");
+        v.push(("copy".into(), "copy the last answer  ·  /copy code for the last code block".into()));
         for (c, d) in [("model", "pick a model"), ("effort", "pick the effort level"), ("tasks", "background shells, monitors, agents and workflows"), ("mcp", "mcp servers: reconnect, enable or disable"), ("diff", "all changes in this workspace"), ("rename", "name this session")] {
             if self.lv.is_some() || matches!(c, "model" | "effort" | "tasks") {
                 v.retain(|x| x.0 != c);
@@ -1317,7 +1319,12 @@ impl App {
                 let (c0, w0) = self.lv.as_ref().map(|l| (l.c0, l.w0)).unwrap_or((0.0, 0.0));
                 let dw = if w0 >= 0.0 { self.d7 - w0 } else { 0.0 };
                 if tok > 0 {
-                    self.bs.push(B::Rc(rcfmt(secs, tok, (tot - c0).max(0.0), dw), self.t.max(1)));
+                    let mut r = rcfmt(secs, tok, (tot - c0).max(0.0), dw);
+                    let ne = self.tedits();
+                    if ne > 0 {
+                        r += &format!("  ·  {ne} edit{}", if ne == 1 { "" } else { "s" });
+                    }
+                    self.bs.push(B::Rc(r, self.t.max(1)));
                 }
                 if let Some(l) = &mut self.lv {
                     l.c0 = tot;

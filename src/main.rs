@@ -641,6 +641,9 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
 
 impl V for V1 {
     fn key(&mut self, k: &Ke, a: &mut App) -> bool {
+        if a.fs.is_some() {
+            return false;
+        }
         let am = a.atmenu();
         if !am.is_empty() && a.rw.is_none() && a.pk.is_none() && a.tk.is_none() {
             let sel = a.ms.min(am.len() - 1);
@@ -764,7 +767,10 @@ impl V for V1 {
         let w = (ar.width as usize).saturating_sub(6);
         let x0 = ar.x + (ar.width - w as u16) / 2;
         let iw = w - 2;
-        let (il, (cx, cy)) = inwrap(&a.inp, a.cur, iw);
+        let (il, (cx, cy)) = match &a.fs {
+            Some((q, _)) => (vec![q.clone()], (unicode_width::UnicodeWidthStr::width(q.as_str()), 0)),
+            None => inwrap(&a.inp, a.cur, iw),
+        };
         let ih = il.len().clamp(1, (ar.height as usize / 3).max(8));
         let mut extra: Vec<Line<'static>> = vec![];
         let mut bt: Vec<Line<'static>> = vec![];
@@ -1168,6 +1174,7 @@ impl V for V1 {
             // starts above or ends below the screen still opens whole
             let (v0, vn) = if nb <= bh as usize { (0, nb) } else { (nb - bh as usize - scr.min(nb - bh as usize), bh as usize) };
             let wl = links(&bl, v0.saturating_sub(16), (v0 + vn + 16).min(nb), w);
+            a.bv.set((nb, bh as usize));
             *a.btx.borrow_mut() = bl.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
             let ls = tail(bl, bh as usize, &mut scr);
             let pad_top = bh as usize - ls.len();
@@ -1184,6 +1191,7 @@ impl V for V1 {
                 }
             });
             let y0 = top + pad_top as u16;
+            let nl = ls.len();
             let mut ul = vec![];
             for (i, xa, xb, u) in wl {
                 if i < s0 || i >= s0 + ls.len() {
@@ -1202,6 +1210,24 @@ impl V for V1 {
                 for x in xa..xb {
                     if let Some(c) = buf.cell_mut((x, y)) {
                         c.set_style(c.style().add_modifier(ratatui::style::Modifier::UNDERLINED));
+                    }
+                }
+            }
+            if let Some((_, ix)) = &a.fs {
+                for (j, (i, x, hw)) in a.fhits().into_iter().enumerate() {
+                    if i < s0 || i >= s0 + nl {
+                        continue;
+                    }
+                    let y = y0 + (i - s0) as u16;
+                    for xx in x0 + x as u16..(x0 + (x + hw) as u16).min(x0 + w as u16) {
+                        if let Some(c) = buf.cell_mut((xx, y)) {
+                            if j == *ix {
+                                c.modifier.insert(Modifier::REVERSED | Modifier::BOLD);
+                            } else {
+                                c.modifier.insert(Modifier::UNDERLINED);
+                                c.fg = PE();
+                            }
+                        }
                     }
                 }
             }
@@ -1300,6 +1326,11 @@ impl V for V1 {
                 vec![]
             };
             il2.push(if hint.is_empty() { Line::from(sp) } else { lr(sp, hint, w) });
+        }
+        if let Some((q, ix)) = &a.fs {
+            let n = a.fhits().len();
+            let r = if q.is_empty() { "type to search  ·  esc close".to_string() } else if n == 0 { "no match  ·  esc close".to_string() } else { format!("{}/{n}  ·  enter older  ·  shift+enter newer  ·  esc close ", ix + 1) };
+            il2 = vec![lr(vec![Span::styled("/", st(LI()).bold()), pad(1), Span::styled(q.clone(), st(WH()))], vec![Span::styled(r, st(FA()))], w)];
         }
         f.render_widget(Paragraph::new(il2), col(iy, ih as u16));
         a.ig.set((iy, ih as u16, iw));

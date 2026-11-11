@@ -290,6 +290,9 @@ pub struct App {
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub pst: Vec<String>,
+    pub fs: Option<(String, usize)>,
+    pub bv: Cell<(usize, usize)>,
+    pub dn: bool,
     und: Vec<(String, usize)>,
     red: Vec<(String, usize)>,
     uk: bool,
@@ -549,6 +552,9 @@ impl App {
             le: 0,
             imgs: vec![],
             pst: vec![],
+            fs: None,
+            bv: Cell::new((0, 0)),
+            dn: false,
             und: vec![],
             red: vec![],
             uk: false,
@@ -1072,6 +1078,10 @@ impl App {
             }
             return;
         }
+        if c0 == "copy" {
+            self.copylast(a0.trim() == "code");
+            return;
+        }
         if self.lv.is_some() {
             self.lcmd(r);
             return;
@@ -1109,7 +1119,7 @@ impl App {
             "context" => self.bs.push(B::Sys(format!("context  {:.0}% of 1M used  ·  system 8%  ·  tools 6%  ·  messages {:.0}%", self.ctx, self.ctx - 14.0))),
             "usage" => self.bs.push(B::Sys(format!("usage  5h {:.0}%  ·  7d {:.0}%  ·  opus 7d 2%", self.h5, self.d7))),
             "resume" => self.bs.push(B::Sys("resume  (mock) 12 older sessions in ~/projects/rusttok".into())),
-            "help" => self.bs.push(B::Sys("enter send  shift+enter newline  esc stop  ctrl+o details or unfold paste  ctrl+z undo  ctrl+y redo  ctrl+t todos  shift+tab mode".into())),
+            "help" => self.bs.push(B::Sys("enter send  shift+enter newline  esc stop  ctrl+o details or unfold paste  ctrl+z undo  ctrl+y redo  ctrl+f find  alt+up/down jump between prompts  ctrl+t todos  shift+tab mode  /copy [code]".into())),
             _ => self.bs.push(B::Sys(format!("unknown command  /{c}"))),
         }
     }
@@ -1700,8 +1710,132 @@ impl App {
         Some((st[cy], e))
     }
 
+    fn copylast(&mut self, code: bool) {
+        let lu = self.bs.iter().rposition(|b| matches!(b, B::U(..))).map(|i| i + 1).unwrap_or(0);
+        let t: Vec<&str> = self.bs[lu..].iter().filter_map(|b| if let B::T(x) = b { Some(x.as_str()) } else { None }).collect();
+        let t = if t.is_empty() { self.bs.iter().rev().find_map(|b| if let B::T(x) = b { Some(x.clone()) } else { None }).unwrap_or_default() } else { t.join("\n\n") };
+        let x = if code {
+            let mut bl: Vec<String> = vec![];
+            let mut cur: Option<String> = None;
+            for l in t.lines() {
+                if l.trim_start().starts_with("```") {
+                    match cur.take() {
+                        Some(c) => bl.push(c),
+                        None => cur = Some(String::new()),
+                    }
+                } else if let Some(c) = &mut cur {
+                    if !c.is_empty() {
+                        c.push('\n');
+                    }
+                    c.push_str(l);
+                }
+            }
+            bl.pop().unwrap_or_default()
+        } else {
+            t.trim().to_string()
+        };
+        if x.is_empty() {
+            self.toast(if code { "no code block" } else { "nothing to copy" });
+            return;
+        }
+        copy(&x);
+        self.toast(format!("copied {} lines", x.lines().count()));
+    }
+
+    pub fn fhits(&self) -> Vec<(usize, usize, usize)> {
+        let Some((q, _)) = &self.fs else { return vec![] };
+        let q: Vec<char> = q.chars().flat_map(char::to_lowercase).collect();
+        if q.is_empty() {
+            return vec![];
+        }
+        let mut o = vec![];
+        for (i, l) in self.btx.borrow().iter().enumerate() {
+            let cs: Vec<char> = l.chars().collect();
+            let lc: Vec<char> = cs.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+            let mut j = 0;
+            while j + q.len() <= lc.len() {
+                if lc[j..j + q.len()] == q[..] {
+                    let x: usize = cs[..j].iter().map(|c| c.width().unwrap_or(0)).sum();
+                    let w: usize = cs[j..j + q.len()].iter().map(|c| c.width().unwrap_or(0)).sum();
+                    o.push((i, x, w));
+                    j += q.len();
+                } else {
+                    j += 1;
+                }
+            }
+        }
+        o
+    }
+
+    fn showline(&mut self, i: usize, top: bool) {
+        let (nb, bh) = self.bv.get();
+        if nb <= bh {
+            return;
+        }
+        let s0 = if top { i.saturating_sub(1) } else { i.saturating_sub(bh / 2) };
+        self.scr = (nb - bh).saturating_sub(s0).min(self.smax.get());
+    }
+
+    fn fgo(&mut self, d: i32) {
+        let h = self.fhits();
+        let Some((_, ix)) = &mut self.fs else { return };
+        if h.is_empty() {
+            *ix = 0;
+            return;
+        }
+        let n = h.len() as i32;
+        *ix = match d {
+            0 => h.len() - 1,
+            _ => ((*ix as i32 + d).rem_euclid(n)) as usize,
+        };
+        let l = h[*ix].0;
+        self.showline(l, false);
+    }
+
+    fn fskey(&mut self, k: KeyEvent) {
+        let Some((q, _)) = &mut self.fs else { return };
+        match k.code {
+            KeyCode::Esc => self.fs = None,
+            KeyCode::Enter if k.modifiers.contains(Km::SHIFT) => self.fgo(1),
+            KeyCode::Enter | KeyCode::Up => self.fgo(-1),
+            KeyCode::Down => self.fgo(1),
+            KeyCode::Backspace => {
+                q.pop();
+                self.fgo(0);
+            }
+            KeyCode::Char('u') if k.modifiers.contains(Km::CONTROL) => {
+                q.clear();
+                self.fgo(0);
+            }
+            KeyCode::Char(c) if !k.modifiers.contains(Km::CONTROL) => {
+                q.push(c);
+                self.fgo(0);
+            }
+            _ => {}
+        }
+    }
+
+    fn jump(&mut self, up: bool) {
+        let (nb, bh) = self.bv.get();
+        if nb <= bh {
+            return;
+        }
+        let s0 = (nb - bh).saturating_sub(self.scr.min(self.smax.get())) + 1;
+        let ps: Vec<usize> = self.btx.borrow().iter().enumerate().filter(|(_, l)| l.starts_with("> ")).map(|(i, _)| i).collect();
+        let t = if up { ps.iter().rev().find(|&&p| p < s0).copied() } else { ps.iter().find(|&&p| p > s0).copied() };
+        match t {
+            Some(p) => self.showline(p, true),
+            None if up => self.scr = self.smax.get(),
+            None => self.scr = 0,
+        }
+    }
+
     fn key0(&mut self, k: KeyEvent) {
         let ct = k.modifiers.contains(Km::CONTROL);
+        if self.fs.is_some() && !(ct && k.code == KeyCode::Char('c')) {
+            self.fskey(k);
+            return;
+        }
         if self.rw.is_some() && !(ct && k.code == KeyCode::Char('c')) {
             self.rwkey(k);
             return;
@@ -1900,6 +2034,9 @@ impl App {
         }
         match k.code {
             KeyCode::Char('c') if ct => self.quit = true,
+            KeyCode::Up if k.modifiers.contains(Km::ALT) => self.jump(true),
+            KeyCode::Down if k.modifiers.contains(Km::ALT) => self.jump(false),
+            KeyCode::Char('f') if ct => self.fs = Some((String::new(), 0)),
             KeyCode::Char('d') if ct && self.inp.is_empty() => self.quit = true,
             KeyCode::Esc => {
                 let dbl = self.t.saturating_sub(self.le) < 18;
@@ -2055,6 +2192,11 @@ impl App {
             KeyCode::PageDown => self.scr = self.scr.saturating_sub(10),
             _ => {}
         }
+    }
+
+    pub fn tedits(&self) -> usize {
+        let lu = self.bs.iter().rposition(|b| matches!(b, B::U(..))).unwrap_or(0);
+        self.bs[lu..].iter().filter(|b| matches!(b, B::Tl(t) if t.k == Tk::Edit && t.st == St::Ok)).count()
     }
 
     pub fn tools(&self) -> Vec<usize> {
@@ -2620,6 +2762,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         App::live(args)?
     };
     let mut lt = String::new();
+    let mut pb = false;
     sys::on_close(bye);
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
@@ -2641,6 +2784,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 let _ = std::fs::write(&p, html(cf.buffer, a.cp.get()));
             }
         }
+        if pb && !a.busy {
+            a.dn = true;
+        }
+        pb = a.busy;
         let tt = ttl(&a);
         if tt != lt {
             let _ = execute!(io::stdout(), ratatui::crossterm::terminal::SetTitle(&tt));
@@ -2658,6 +2805,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         while event::poll(dl.saturating_duration_since(Instant::now()))? {
             match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    a.dn = false;
                     if !a.seld {
                         a.msel = None;
                         a.csel = None;
@@ -2998,8 +3146,8 @@ pub fn bgfile() -> String {
 
 fn ttl(a: &App) -> String {
     let d = if a.stitle.is_empty() { a.cwd.rsplit('/').next().unwrap_or("").to_string() } else { a.stitle.clone() };
-    let st = if a.ask.is_some() || a.qa.is_some() { " · waiting" } else if a.busy { " · working" } else { "" };
-    format!("noname · {d}{st}")
+    let st = if a.ask.is_some() || a.qa.is_some() { "? " } else if a.busy { "● " } else if a.dn { "✓ " } else { "" };
+    format!("{st}noname · {d}")
 }
 
 fn editor(s: &str) -> Option<String> {
@@ -3104,6 +3252,10 @@ fn setup<T: V>(v: &mut T, a: &mut App, s: &str) {
             a.cur = a.inp.chars().count();
         }
         "todo" => a.stodo = true,
+        "find" => {
+            a.bs.push(B::T("docs are at https://docs.rs/ratatui/latest/ratatui/ and (see https://example.com/a?b=1).".into()));
+            a.fs = Some(("frame".into(), 1));
+        }
         "wrap" => {
             a.inp = "can you please refactor the swipe handler so that the momentum calculation lives in its own module and the snapping uses a spring with configurable stiffness, then write tests for edge cases like very fast flicks and tiny drags".into();
             a.cur = a.inp.chars().count();
