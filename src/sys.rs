@@ -208,8 +208,8 @@ pub fn open(path: &str, line: &str) {
         c.arg(path);
         c
     } else if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/c", "start", "", path]);
+        let mut c = Command::new("explorer");
+        c.arg(path.replace('/', "\\"));
         c
     } else {
         let mut c = Command::new("xdg-open");
