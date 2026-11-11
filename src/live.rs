@@ -570,10 +570,10 @@ impl App {
         let c = match self.content(&s) {
             Some(v) => {
                 let mut c: Vec<Value> = v.into_iter().map(|(m, b)| json!({"type": "image", "source": {"type": "base64", "media_type": m, "data": crate::img::b64(b)}})).collect();
-                c.push(json!({"type": "text", "text": s}));
+                c.push(json!({"type": "text", "text": self.expand(&s)}));
                 Value::Array(c)
             }
-            None => Value::String(s),
+            None => Value::String(self.expand(&s)),
         };
         self.send(json!({"type": "user", "message": {"role": "user", "content": c}}));
     }
@@ -588,6 +588,7 @@ impl App {
                     n.tc = self.t;
                     n.t = self.t;
                     n.hist = std::mem::take(&mut self.hist);
+                    n.pst = std::mem::take(&mut self.pst);
                     *self = n;
                 }
             }
@@ -780,6 +781,7 @@ impl App {
             Ok(mut n) => {
                 n.t = self.t;
                 n.hist = std::mem::take(&mut self.hist);
+                n.pst = std::mem::take(&mut self.pst);
                 n.bgw = self.bgw;
                 *self = n;
             }

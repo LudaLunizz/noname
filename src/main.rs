@@ -1283,16 +1283,18 @@ impl V for V1 {
                     }
                 }
             }
-            let hint: Vec<Span<'static>> = if j != 0 {
-                vec![]
-            } else if gh.is_some() {
-                vec![]
+            let dn = il.len().saturating_sub(sk + ih);
+            let hint: Vec<Span<'static>> = if j == sk && sk > 0 {
+                vec![Span::styled(format!("↑ {sk} "), st(FA()))]
+            } else if j + 1 == sk + ih && dn > 0 {
+                vec![Span::styled(format!("↓ {dn} "), st(FA()))]
             } else {
                 vec![]
             };
             il2.push(if hint.is_empty() { Line::from(sp) } else { lr(sp, hint, w) });
         }
         f.render_widget(Paragraph::new(il2), col(iy, ih as u16));
+        a.ig.set((iy, ih as u16, iw));
         let cyy = cy - sk;
         setcur(f, a, x0 + 2 + cx as u16, iy + cyy as u16);
         f.render_widget(Paragraph::new(bt), col(bty, bwh));

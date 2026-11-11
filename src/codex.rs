@@ -110,6 +110,7 @@ impl App {
         let mode = self.mode;
         let t = self.t;
         let imgs: Vec<(&'static str, Vec<u8>)> = self.content(&s).unwrap_or_default().into_iter().map(|(m, b)| (m, b.to_vec())).collect();
+        let x = self.expand(&s);
         let Some(c) = &mut self.cx else { return };
         let mut cmd = Command::new(crate::sys::bin("codex"));
         cmd.arg("exec");
@@ -145,7 +146,7 @@ impl App {
             }
             _ => {}
         }
-        cmd.arg(&s);
+        cmd.arg(&x);
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
         live::guard_pub(&mut cmd);
         let Ok(mut ch) = cmd.spawn() else {

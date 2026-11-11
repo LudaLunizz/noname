@@ -289,6 +289,8 @@ pub struct App {
     pub upf: bool,
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
+    pub pst: Vec<String>,
+    pub ig: Cell<(u16, u16, usize)>,
     pub tasks: Vec<Task>,
     /// last text copied with a mouse selection; right-click pastes it when no clipboard tool is there
     pub clip: String,
@@ -541,6 +543,8 @@ impl App {
             upf: false,
             le: 0,
             imgs: vec![],
+            pst: vec![],
+            ig: Cell::new((0, 0, 0)),
             tasks: vec![],
             clip: String::new(),
             tk: None,
@@ -1154,7 +1158,7 @@ impl App {
             j += 1
         }
         let rest: String = cs[j..].iter().collect();
-        if let Some((_, l)) = imgtok(&rest) {
+        if let Some((_, l)) = atok(&rest) {
             return j + l;
         }
         let w = |c: char| c.is_alphanumeric() || c == '_';
@@ -1179,7 +1183,7 @@ impl App {
         self.ms = 0;
     }
 
-    fn put(&mut self, t: &str) {
+    pub fn put(&mut self, t: &str) {
         for c in t.chars() {
             self.ins(c)
         }
@@ -1450,6 +1454,16 @@ impl App {
             self.rq.push_str(s.lines().next().unwrap_or(""));
             return;
         }
+        let n = s.trim_end().lines().count();
+        let c = s.chars().count();
+        if n > 4 || c > 800 {
+            self.pst.push(s);
+            let pre = self.inp.chars().nth(self.cur.wrapping_sub(1)).is_some_and(|c| !c.is_whitespace());
+            let d = if n > 1 { format!("+{n} lines") } else { format!("{c} chars") };
+            let t = format!("{}[pasted #{} {d}] ", if pre { " " } else { "" }, self.pst.len());
+            self.put(&t);
+            return;
+        }
         self.put(&s);
     }
 
@@ -1472,6 +1486,59 @@ impl App {
             img::Clip::Empty if !self.clip.is_empty() => self.paste(self.clip.clone()),
             img::Clip::Empty => self.toast("clipboard is empty"),
         }
+    }
+
+    pub fn expand(&self, s: &str) -> String {
+        let mut o = String::new();
+        let mut r = s;
+        while let Some(i) = r.find("[pasted #") {
+            o.push_str(&r[..i]);
+            let t = &r[i..];
+            match ptok(t) {
+                Some((k, l)) if k >= 1 && k <= self.pst.len() => {
+                    o.push_str(&self.pst[k - 1]);
+                    r = &t[t.chars().take(l).map(char::len_utf8).sum::<usize>()..];
+                }
+                _ => {
+                    o.push('[');
+                    r = &t[1..];
+                }
+            }
+        }
+        o.push_str(r);
+        o
+    }
+
+    fn vmove(&mut self, up: bool) -> bool {
+        let w = self.ig.get().2;
+        if w == 0 {
+            return false;
+        }
+        let (ls, (cx, cy)) = inwrap(&self.inp, self.cur, w);
+        let (st, _) = inlay(&self.inp, w);
+        let ty = if up {
+            if cy == 0 {
+                return false;
+            }
+            cy - 1
+        } else {
+            if cy + 1 >= ls.len() || cy + 1 >= st.len() {
+                return false;
+            }
+            cy + 1
+        };
+        let mut j = st[ty];
+        let mut col = 0;
+        for c in ls[ty].chars() {
+            let x = c.width().unwrap_or(0);
+            if col + x > cx {
+                break;
+            }
+            col += x;
+            j += 1;
+        }
+        self.cur = j.min(self.nch());
+        true
     }
 
     pub fn content(&self, s: &str) -> Option<Vec<(&'static str, &[u8])>> {
@@ -1853,6 +1920,8 @@ impl App {
             KeyCode::Right => self.cur = (self.cur + 1).min(self.nch()),
             KeyCode::Home => self.cur = 0,
             KeyCode::End => self.cur = self.nch(),
+            KeyCode::Up if self.vmove(true) => {}
+            KeyCode::Down if self.vmove(false) => {}
             KeyCode::Up if !self.inp.contains('\n') => {
                 if self.hist.is_empty() {
                     return;
@@ -1965,7 +2034,24 @@ fn tokend(cs: &[char]) -> Option<usize> {
     }
     let o = cs.iter().rposition(|&c| c == '[')?;
     let t: String = cs[o..].iter().collect();
-    imgtok(&t).filter(|&(_, l)| l == t.chars().count()).map(|_| o)
+    atok(&t).filter(|&(_, l)| l == t.chars().count()).map(|_| o)
+}
+
+pub fn ptok(s: &str) -> Option<(usize, usize)> {
+    let r = s.strip_prefix("[pasted #")?;
+    let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if d.is_empty() {
+        return None;
+    }
+    let e = r[d.len()..].chars().take(32).position(|c| c == ']' || c == '[' || c == '\n')?;
+    if r[d.len()..].chars().nth(e) != Some(']') {
+        return None;
+    }
+    Some((d.parse().ok()?, 9 + d.len() + e + 1))
+}
+
+pub fn atok(s: &str) -> Option<(usize, usize)> {
+    imgtok(s).or_else(|| ptok(s))
 }
 
 pub fn imgtok(s: &str) -> Option<(usize, usize)> {
@@ -1982,7 +2068,7 @@ pub fn imgspans(s: &str, base: Style, hi: Style) -> Vec<Span<'static>> {
     let mut cur = String::new();
     let mut rest = s;
     while !rest.is_empty() {
-        if let Some((_, l)) = imgtok(rest) {
+        if let Some((_, l)) = atok(rest) {
             if !cur.is_empty() {
                 v.push(Span::styled(std::mem::take(&mut cur), base));
             }
@@ -2254,40 +2340,81 @@ pub fn tail(v: Vec<Line<'static>>, h: usize, scr: &mut usize) -> Vec<Line<'stati
     v.into_iter().skip(s).take(h).collect()
 }
 
-pub fn inwrap(s: &str, cur: usize, w: usize) -> (Vec<String>, (usize, usize)) {
+pub fn inlay(s: &str, w: usize) -> (Vec<usize>, Vec<usize>) {
     let w = w.max(2);
-    let mut ls = vec![String::new()];
-    let (mut cx, mut cy) = (0, 0);
-    let mut col = 0;
-    for (i, c) in s.chars().enumerate() {
-        if i == cur {
-            cx = col;
-            cy = ls.len() - 1;
-        }
-        if c == '\n' {
-            ls.push(String::new());
-            col = 0;
-            continue;
-        }
-        let x = c.width().unwrap_or(0);
-        if col + x > w {
-            ls.push(String::new());
-            col = 0;
-            if i == cur {
-                cx = 0;
-                cy = ls.len() - 1;
+    let cs: Vec<char> = s.chars().collect();
+    let mut tk = vec![false; cs.len()];
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '[' {
+            let t: String = cs[i..].iter().take(48).collect();
+            if let Some((_, l)) = atok(&t) {
+                for x in tk.iter_mut().take(i + l).skip(i + 1) {
+                    *x = true;
+                }
+                i += l;
+                continue;
             }
         }
-        ls.last_mut().unwrap().push(c);
+        i += 1;
+    }
+    let cw = |c: char| c.width().unwrap_or(0);
+    let mut st = vec![0];
+    let mut en = vec![];
+    let mut col = 0;
+    let mut brk: Option<usize> = None;
+    for i in 0..cs.len() {
+        let c = cs[i];
+        if c == '\n' {
+            en.push(i);
+            st.push(i + 1);
+            col = 0;
+            brk = None;
+            continue;
+        }
+        let x = cw(c);
+        if c == ' ' && !tk[i] {
+            if col + x > w {
+                en.push(i + 1);
+                st.push(i + 1);
+                col = 0;
+                brk = None;
+            } else {
+                col += x;
+                brk = Some(i + 1);
+            }
+            continue;
+        }
+        if col + x > w {
+            let s0 = *st.last().unwrap();
+            let b = brk.filter(|&b| b > s0 && b <= i).unwrap_or(i);
+            en.push(b);
+            st.push(b);
+            col = cs[b..i].iter().map(|&c| cw(c)).sum();
+            brk = None;
+        }
         col += x;
     }
-    if cur >= s.chars().count() {
-        if col >= w {
+    en.push(cs.len());
+    (st, en)
+}
+
+pub fn inwrap(s: &str, cur: usize, w: usize) -> (Vec<String>, (usize, usize)) {
+    let w = w.max(2);
+    let cs: Vec<char> = s.chars().collect();
+    let (st, en) = inlay(s, w);
+    let mut ls: Vec<String> = st.iter().zip(&en).map(|(&a, &b)| cs[a..b].iter().collect::<String>().trim_end_matches(' ').to_string()).collect();
+    let cur = cur.min(cs.len());
+    let mut cy = st.iter().rposition(|&a| a <= cur).unwrap_or(0);
+    let mut cx: usize = cs[st[cy]..cur].iter().map(|&c| c.width().unwrap_or(0)).sum();
+    if cx >= w {
+        if cur == cs.len() {
             ls.push(String::new());
-            col = 0;
+            cy = ls.len() - 1;
+            cx = 0;
+        } else {
+            cx = w - 1;
         }
-        cx = col;
-        cy = ls.len() - 1;
     }
     (ls, (cx, cy))
 }
@@ -2511,6 +2638,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                         // same as ctrl+v (images and copied files attach), with noname's own copy
                         // as fallback when there is no clipboard tool
                         a.clipv_any();
+                    }
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if { let (y, h, _) = a.ig.get(); h > 1 && m.row >= y && m.row < y + h } => {
+                        let up = m.kind == MouseEventKind::ScrollUp;
+                        a.vmove(up);
                     }
                     MouseEventKind::ScrollUp => {
                         a.msel = None;
@@ -2868,6 +2999,16 @@ fn setup<T: V>(v: &mut T, a: &mut App, s: &str) {
             a.cur = a.inp.chars().count();
         }
         "todo" => a.stodo = true,
+        "wrap" => {
+            a.inp = "can you please refactor the swipe handler so that the momentum calculation lives in its own module and the snapping uses a spring with configurable stiffness, then write tests for edge cases like very fast flicks and tiny drags".into();
+            a.cur = a.inp.chars().count();
+        }
+        "paste" => {
+            a.inp = "look at this log ".into();
+            a.cur = a.inp.chars().count();
+            a.paste((0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"));
+            a.put("and fix it\nalso\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine words that go on and on until the line wraps around nicely");
+        }
         "done" => {
             a.n = 2;
             a.inp = "can it get smoother?".into();
