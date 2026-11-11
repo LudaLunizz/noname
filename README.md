@@ -67,6 +67,10 @@ Other flags go straight to `claude`.
 | `@` | mention a file | `/effort` | effort level |
 | `↓` | tasks | `/rename` | name the session |
 | `drag` | select and copy | `double / triple click` | copy word / line |
+| `ctrl+z` / `ctrl+y` | undo / redo input | `/copy` | copy last answer |
+| `ctrl+f` | find in chat | `/copy code` | copy last code block |
+| `alt+↑` / `alt+↓` | jump between prompts | | |
+| `ctrl+o` on a paste | unfold pasted text | | |
 
 Every Claude Code command and skill works as usual.
 
