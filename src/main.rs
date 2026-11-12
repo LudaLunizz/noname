@@ -1041,7 +1041,7 @@ impl V for V1 {
         }
         if let Some((sel, _)) = a.tp {
             extra.push(Line::from(Span::styled("theme", st(L2()).bold())));
-            for (j, t) in pal::THEMES.iter().enumerate() {
+            for (j, t) in pal::all().iter().enumerate() {
                 let on = j == sel;
                 extra.push(Line::from(vec![Span::styled(if on { "› " } else { "  " }, st(LI()).bold()), Span::styled(t.name, if on { st(WH()).bold() } else { st(MU()) })]));
             }

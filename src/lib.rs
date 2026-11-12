@@ -31,13 +31,14 @@ pub mod pal {
     use ratatui::style::Color;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[derive(Clone, Copy)]
     pub struct Theme {
         pub name: &'static str,
         pub desc: &'static str,
         c: [u32; 12],
     }
 
-    pub const THEMES: [Theme; 4] = [
+    const BUILTIN: [Theme; 4] = [
         Theme { name: "default", desc: "white, gray, light purple", c: [0xe4e4e8, 0xffffff, 0xb4b4bc, 0x85858f, 0xc3b0ff, 0xd8caff, 0xcdc4e8, 0xa9d6e5, 0xa6e3a1, 0xf38ba8, 0xe6b3ff, 0x161618] },
         Theme { name: "dracula", desc: "purple, pink, neon", c: [0xf8f8f2, 0xffffff, 0xc3c6dd, 0x7b88b8, 0xbd93f9, 0xff92df, 0xcaa9fa, 0x8be9fd, 0x50fa7b, 0xff5555, 0xff79c6, 0x282a36] },
         Theme { name: "tokyo-night", desc: "night blue, city lights", c: [0xc0caf5, 0xe0e6ff, 0xa9b1d6, 0x737aa2, 0x7aa2f7, 0xbb9af7, 0xb4c2f0, 0x7dcfff, 0x9ece6a, 0xf7768e, 0xff9e64, 0x1a1b26] },
@@ -45,17 +46,82 @@ pub mod pal {
     ];
 
     static CUR: AtomicUsize = AtomicUsize::new(0);
+    static ALL: std::sync::OnceLock<Vec<Theme>> = std::sync::OnceLock::new();
+
+    const KEYS: [&str; 12] = ["fg", "bright", "muted", "faint", "accent", "accent2", "soft", "cyan", "green", "red", "pink", "base"];
+
+    pub fn dir() -> String {
+        crate::sys::cfgfile("themes")
+    }
+
+    fn hx(v: &str) -> Option<u32> {
+        let v = v.trim().trim_start_matches('#');
+        let v = if v.len() == 3 { v.chars().flat_map(|c| [c, c]).collect() } else { v.to_string() };
+        if v.len() != 6 {
+            return None;
+        }
+        u32::from_str_radix(&v, 16).ok()
+    }
+
+    pub fn parse(name: &str, src: &str) -> Theme {
+        let mut c = BUILTIN[0].c;
+        let mut desc = String::from("custom");
+        for l in src.lines() {
+            let l = l.trim();
+            let Some((k, v)) = l.split_once('=') else { continue };
+            let k = k.trim().to_lowercase();
+            if k.starts_with('#') {
+                continue;
+            }
+            if k == "desc" {
+                desc = v.trim().to_string();
+            } else if let (Some(i), Some(x)) = (KEYS.iter().position(|n| *n == k), hx(v)) {
+                c[i] = x;
+            }
+        }
+        Theme { name: Box::leak(name.to_string().into_boxed_str()), desc: Box::leak(desc.into_boxed_str()), c }
+    }
+
+    fn user() -> Vec<Theme> {
+        let Ok(rd) = std::fs::read_dir(dir()) else { return Vec::new() };
+        let mut v: Vec<(String, String)> = rd
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.extension()?.to_str()? != "theme" {
+                    return None;
+                }
+                let n = p.file_stem()?.to_str()?.to_lowercase();
+                Some((n, std::fs::read_to_string(&p).ok()?))
+            })
+            .collect();
+        v.sort();
+        v.iter().map(|(n, s)| parse(n, s)).collect()
+    }
+
+    pub fn all() -> &'static [Theme] {
+        ALL.get_or_init(|| {
+            let mut v = BUILTIN.to_vec();
+            for t in user() {
+                match v.iter().position(|b| b.name == t.name) {
+                    Some(i) => v[i] = t,
+                    None => v.push(t),
+                }
+            }
+            v
+        })
+    }
 
     pub fn cur() -> usize {
         CUR.load(Ordering::Relaxed)
     }
     pub fn set(i: usize) {
-        CUR.store(i.min(THEMES.len() - 1), Ordering::Relaxed);
+        CUR.store(i.min(all().len() - 1), Ordering::Relaxed);
     }
     pub fn find(n: &str) -> Option<usize> {
         let k = |x: &str| x.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
         let n = k(n);
-        THEMES.iter().position(|t| k(t.name) == n || (n == "catppuccin" && t.name == "mocha") || (n == "tokyo" && t.name == "tokyo-night"))
+        all().iter().position(|t| k(t.name) == n || (n == "catppuccin" && t.name == "mocha") || (n == "tokyo" && t.name == "tokyo-night"))
     }
     pub fn file() -> String {
         crate::sys::cfgfile("theme")
@@ -70,10 +136,10 @@ pub mod pal {
         if let Some(d) = std::path::Path::new(&f).parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        let _ = std::fs::write(&f, THEMES[cur()].name);
+        let _ = std::fs::write(&f, all()[cur()].name);
     }
     fn c(i: usize) -> Color {
-        let v = THEMES[cur()].c[i];
+        let v = all()[cur()].c[i];
         Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
     }
     pub fn FG() -> Color { c(0) }
@@ -88,6 +154,23 @@ pub mod pal {
     pub fn RD() -> Color { c(9) }
     pub fn PK() -> Color { c(10) }
     pub fn BASE() -> Color { c(11) }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_theme_file() {
+            let t = parse("mine", "# comment\ndesc = black and red\naccent = #e0362b\nfg=ececec\nred = #f00\nbogus = #123456\npink = nope\n");
+            assert_eq!(t.name, "mine");
+            assert_eq!(t.desc, "black and red");
+            assert_eq!(t.c[4], 0xe0362b);
+            assert_eq!(t.c[0], 0xececec);
+            assert_eq!(t.c[9], 0xff0000);
+            assert_eq!(t.c[10], BUILTIN[0].c[10]);
+            assert_eq!(t.c[11], BUILTIN[0].c[11]);
+        }
+    }
 }
 
 
@@ -940,7 +1023,7 @@ impl App {
                 Some(m) => format!("via {m}"),
                 None => if upd::enabled() { "on" } else { "off" }.into(),
             }),
-            ("theme", pal::THEMES[pal::cur()].name.into()),
+            ("theme", pal::all()[pal::cur()].name.into()),
             ("default permission", MODES[defmode().unwrap_or(0)].into()),
             ("background", self.bgw.unwrap_or("off").into()),
             ("context bar", if bars()[0] { "on" } else { "off" }.into()),
@@ -1017,7 +1100,7 @@ impl App {
 
     pub fn settheme(&mut self, i: usize) {
         pal::set(i);
-        self.toast(format!("theme  {}", pal::THEMES[pal::cur()].name));
+        self.toast(format!("theme  {}", pal::all()[pal::cur()].name));
         if self.lv.is_some() || self.cx.is_some() {
             pal::save();
         }
@@ -1957,7 +2040,7 @@ impl App {
                 self.quit = true;
                 return;
             }
-            let n = pal::THEMES.len();
+            let n = pal::all().len();
             match k.code {
                 KeyCode::Esc => {
                     pal::set(prev);

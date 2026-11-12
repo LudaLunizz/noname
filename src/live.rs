@@ -517,7 +517,7 @@ impl App {
         v.retain(|x| x.0 != "theme");
         v.push(("noname".into(), "noname settings".into()));
         v.push(("default-permission".into(), "permission mode new sessions start in".into()));
-        v.push(("theme".into(), crate::pal::THEMES.iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
+        v.push(("theme".into(), crate::pal::all().iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
         v.push(("background".into(), crate::bg::LIST.into()));
         v.push(("resume".into(), "pick an older session in this folder".into()));
         v.retain(|x| x.0 != "copy");

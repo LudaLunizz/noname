@@ -27,7 +27,7 @@ noname is a terminal UI (TUI) for [Claude Code](https://claude.com/claude-code),
 - streaming text, thinking and tools, diffs that write themselves in
 - inline permissions and questions, rewind with `esc esc`, `/btw` side questions
 - live context and limit bars, cost under every answer
-- themes (default, dracula, tokyo-night, catppuccin mocha), animated backgrounds, self updates
+- themes (default, dracula, tokyo-night, catppuccin mocha, or your own), animated backgrounds, self updates
 - image paste, `@` file mentions, background shells and subagents, `/diff`, `/mcp`, `/resume`
 - Linux, macOS and Windows; optional Codex engine with `--codex`
 
@@ -75,6 +75,26 @@ Other flags go straight to `claude`.
 | `ctrl+o` on a paste | unfold pasted text | | |
 
 Every Claude Code command and skill works as usual.
+
+### Custom themes
+
+Drop a `<name>.theme` file into `~/.config/noname/themes/` (`%APPDATA%\noname\themes\` on Windows) and it shows up in `/theme`. Missing keys fall back to the default theme, and a file named like a built-in theme replaces it.
+
+```ini
+desc    = black, steel, red
+fg      = #ececec
+bright  = #ffffff
+muted   = #b4b4b4
+faint   = #7a7a7a
+accent  = #e0362b
+accent2 = #c9ccd1
+soft    = #d6d9de
+cyan    = #9aa7b4
+green   = #a9c4b0
+red     = #ff6b5e
+pink    = #d08a8a
+base    = #0a0a0a
+```
 
 ## License
 
