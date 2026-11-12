@@ -291,9 +291,9 @@ impl Bg {
                     for j in 0..d.n as i32 {
                         let y = hy - j;
                         let f = j as f32 / d.n as f32;
-                        let ci = (hsh(d.s ^ y as u64, (t / 4 + j as u64 * 3) / (if j == 0 { 1 } else { 6 })) % CS.len() as u64) as usize;
+                        let ci = (hsh(d.s ^ y as u64, if j == 0 { t / 4 } else { t / 24 + y as u64 % 7 }) % CS.len() as u64) as usize;
                         let ch = (CS[ci] as char).to_string();
-                        let c = if j == 0 { grad(&[base, crate::pal::WH()], 0.42) } else { grad(&[grad(&[base, LI()], 0.34), grad(&[base, CY()], 0.18), base], f) };
+                        let c = if j == 0 { grad(&[base, crate::pal::WH()], 0.42) } else { grad(&[grad(&[base, LI()], 0.34), grad(&[base, CY()], 0.18), base], (f * 6.0).ceil() / 6.0) };
                         put(b, d.x as i32, y, &ch, c);
                     }
                 }
@@ -359,7 +359,7 @@ impl Bg {
                         if h % 61 != 0 || !free(b, x, y) {
                             continue;
                         }
-                        let tw = pulse(t + h % 200, 80.0 + (h % 60) as f32);
+                        let tw = (pulse(t + h % 200, 80.0 + (h % 60) as f32) * 6.0).round() / 6.0;
                         let ch = ["·", ".", "+", "*"][(h / 61 % 4) as usize];
                         let c = grad(&[grad(&[FA(), BASE()], 0.85), if h % 3 == 0 { CY() } else { LI() }], 0.15 + tw * 0.35);
                         b[(x, y)].set_symbol(ch).set_style(Style::new().fg(c));

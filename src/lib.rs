@@ -2833,6 +2833,36 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
 }
 
 /// Runs the UI; returns the Claude session id (empty when there is none) so it can be shown after exit.
+struct Fx(u64);
+
+impl std::hash::Hasher for Fx {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, b: &[u8]) {
+        for c in b.chunks(8) {
+            let mut w = [0u8; 8];
+            w[..c.len()].copy_from_slice(c);
+            self.write_u64(u64::from_le_bytes(w));
+        }
+    }
+    fn write_u8(&mut self, i: u8) {
+        self.write_u64(i as u64)
+    }
+    fn write_u16(&mut self, i: u16) {
+        self.write_u64(i as u64)
+    }
+    fn write_u32(&mut self, i: u32) {
+        self.write_u64(i as u64)
+    }
+    fn write_usize(&mut self, i: usize) {
+        self.write_u64(i as u64)
+    }
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
 fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cx = args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
@@ -2846,6 +2876,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     };
     let mut lt = String::new();
     let mut pb = false;
+    let mut pv: Option<u64> = None;
+    let mut sk = 0u32;
+    let shot = std::env::var("NONAME_SHOT").ok();
     sys::on_close(bye);
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
@@ -2853,21 +2886,46 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     }
     while !a.quit {
         a.cp.set(None);
-        let _ = ratatui::crossterm::queue!(io::stdout(), ratatui::crossterm::terminal::BeginSynchronizedUpdate, ratatui::crossterm::cursor::Hide);
-        let cf = term.draw(|f| {
-            v.draw(f, &a);
+        term.autoresize()?;
+        {
+            let mut f = term.get_frame();
+            v.draw(&mut f, &a);
             let tx = a.txt.borrow();
             selhl(f.buffer_mut(), a.msel.or_else(|| a.cvis()), tx.as_ref());
-        })?;
-        let _ = execute!(io::stdout(), ratatui::crossterm::terminal::EndSynchronizedUpdate);
-        if let Ok(p) = std::env::var("NONAME_SHOT") {
-            if p.contains("{}") {
-                if a.t % 3 == 0 {
-                    let _ = std::fs::write(p.replace("{}", &format!("{:05}", a.t / 3)), html(cf.buffer, a.cp.get()));
+        }
+        let cp = a.cp.get();
+        let hs = {
+            use std::hash::{Hash, Hasher};
+            let mut h = Fx(0);
+            term.current_buffer_mut().hash(&mut h);
+            cp.hash(&mut h);
+            h.finish()
+        };
+        if pv == Some(hs) && shot.is_none() {
+            term.current_buffer_mut().reset();
+            sk += 1;
+        } else {
+            sk = 0;
+            let _ = ratatui::crossterm::queue!(io::stdout(), ratatui::crossterm::terminal::BeginSynchronizedUpdate, ratatui::crossterm::cursor::Hide);
+            if let Some(p) = &shot {
+                let k = if p.contains("{}") { 3 } else { 15 };
+                if a.t % k == 0 {
+                    let f = p.replace("{}", &format!("{:05}", a.t / 3));
+                    let _ = std::fs::write(f, html(term.current_buffer_mut(), cp));
                 }
-            } else if a.t % 15 == 0 {
-                let _ = std::fs::write(&p, html(cf.buffer, a.cp.get()));
             }
+            term.flush()?;
+            match cp {
+                Some(c) => {
+                    term.show_cursor()?;
+                    term.set_cursor_position(c)?;
+                }
+                None => term.hide_cursor()?,
+            }
+            pv = Some(hs);
+            term.swap_buffers();
+            ratatui::backend::Backend::flush(term.backend_mut())?;
+            let _ = execute!(io::stdout(), ratatui::crossterm::terminal::EndSynchronizedUpdate);
         }
         if pb && !a.busy {
             a.dn = true;
@@ -2885,8 +2943,11 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 a.cur = a.inp.chars().count();
             }
             term.clear()?;
+            pv = None;
         }
-        let dl = Instant::now() + Duration::from_millis(33);
+        let slow = sk >= 15 && !a.seld;
+        let t0 = Instant::now();
+        let dl = t0 + Duration::from_millis(if slow { 250 } else { 33 });
         while event::poll(dl.saturating_duration_since(Instant::now()))? {
             match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
@@ -2993,7 +3054,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 },
                 _ => {}
             }
-            if a.quit {
+            if a.quit || slow {
                 break;
             }
         }
@@ -3019,7 +3080,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                 a.bgw = bg::canon(v[(a.t / 30) as usize % v.len()]);
             }
         }
-        a.step();
+        for _ in 0..(t0.elapsed().as_millis() / 33).clamp(1, 10) {
+            a.step();
+        }
         if std::env::var("NONAME_MOCK").is_err() {
             let sid = a.session_id();
             if let Ok(mut s) = SID.lock() {
