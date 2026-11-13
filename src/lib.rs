@@ -174,7 +174,7 @@ pub mod pal {
 }
 
 
-pub const MODELS: [&str; 4] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1"];
+pub const MODELS: [&str; 11] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.1", "opus 5", "sonnet 5", "fable 5", "opus 4.8", "opus 4.7", "opus 4.6", "sonnet 4.6"];
 /// Window opacity steps in the /noname menu, in percent.
 pub const OPAC: [u8; 8] = [100, 90, 80, 70, 60, 50, 40, 30];
 
@@ -187,7 +187,7 @@ pub fn opac() -> u8 {
 }
 
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-pub const MID_ALL: [(&str, &str); 4] = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1")];
+pub const MID_ALL: [(&str, &str); 11] = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5", "Opus 5"), ("claude-sonnet-5", "Sonnet 5"), ("claude-fable-5", "Fable 5"), ("claude-opus-4-8", "Opus 4.8"), ("claude-opus-4-7", "Opus 4.7"), ("claude-opus-4-6", "Opus 4.6"), ("claude-sonnet-4-6", "Sonnet 4.6")];
 pub const MODES: [&str; 4] = ["default", "plan", "auto", "bypass"];
 pub const CMDS: [(&str, &str); 9] = [
     ("btw", "side question, main chat keeps going"),

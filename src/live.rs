@@ -137,7 +137,6 @@ impl Drop for Lv {
     }
 }
 
-const MID: [&str; 4] = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"];
 const PM: [&str; 4] = ["default", "plan", "auto", "bypassPermissions"];
 
 fn rd(r: impl io::Read + Send + 'static) -> Receiver<Value> {
@@ -299,7 +298,7 @@ impl App {
 
     pub(crate) fn setmodel(&mut self, v: &str) {
         let d = self.models.iter().find(|m| m.0 == v).map(|m| m.1.clone()).unwrap_or_else(|| mnm(v));
-        if let Some(i) = MID.iter().position(|x| v.starts_with(x)) {
+        if let Some(i) = MID_ALL.iter().position(|x| v.starts_with(x.0)) {
             self.model = i;
         }
         self.mname = d.to_lowercase().replace(' ', "-");
@@ -932,7 +931,7 @@ impl App {
                         self.load(&sid, &sv(&e, "cwd"));
                     }
                     let m = sv(&e, "model");
-                    if let Some(i) = MID.iter().position(|x| m.starts_with(x)) {
+                    if let Some(i) = MID_ALL.iter().position(|x| m.starts_with(x.0)) {
                         self.model = i;
                     }
                     self.mname = mnm(&m);
@@ -1097,7 +1096,7 @@ impl App {
                 // the model that really answered; keeps the name on screen true whatever changed it
                 let m = sv(&e["message"], "model");
                 if e["parent_tool_use_id"].is_null() && m.starts_with("claude-") {
-                    if let Some(i) = MID.iter().position(|x| m.starts_with(x)) {
+                    if let Some(i) = MID_ALL.iter().position(|x| m.starts_with(x.0)) {
                         self.model = i;
                     }
                     self.mname = mnm(&m);
@@ -1191,12 +1190,18 @@ impl App {
                     if let Some(ms) = p["models"].as_array() {
                         let v: Vec<(String, String, String, Vec<String>)> = ms.iter().filter(|m| m["disabled"] != true).map(|m| (sv(m, "value"), sv(m, "displayName"), sv(m, "description"), m["supportedEffortLevels"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(str::to_string)).collect())).collect();
                         if !v.is_empty() {
+                            let mut v = v;
+                            for (id, d) in MID_ALL.iter().skip(4) {
+                                if !v.iter().any(|m| m.0 == *id || m.1 == *d) {
+                                    v.push((id.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect()));
+                                }
+                            }
                             self.models = v;
                         }
                         let m = ms.iter().find(|m| sv(m, "value") == want).map(|m| sv(m, "resolvedModel")).filter(|x| !x.is_empty()).unwrap_or(want.clone());
                         if self.mname == "…" {
                             self.mname = mnm(&m);
-                            if let Some(i) = MID.iter().position(|x| m.starts_with(x)) {
+                            if let Some(i) = MID_ALL.iter().position(|x| m.starts_with(x.0)) {
                                 self.model = i;
                             }
                         }
