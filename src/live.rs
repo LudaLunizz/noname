@@ -485,6 +485,12 @@ impl App {
                 a.mode = i;
             }
         }
+        if !args.iter().any(|x| x == "--effort" || x.starts_with("--effort=")) {
+            if let Some(e) = crate::defeff() {
+                args.extend(["--effort".into(), e.into()]);
+                a.effs = e.into();
+            }
+        }
         let (ch, inp, rx) = spawn(&args).map_err(|e| if e.kind() == io::ErrorKind::NotFound { io::Error::new(e.kind(), "claude not found, install Claude Code first: https://claude.com/claude-code") } else { e })?;
         a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
         a.ctrl("init", json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}));

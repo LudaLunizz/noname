@@ -1025,6 +1025,7 @@ impl App {
             }),
             ("theme", pal::all()[pal::cur()].name.into()),
             ("default permission", MODES[defmode().unwrap_or(0)].into()),
+            ("default effort", defeff().unwrap_or("claude").into()),
             ("background", self.bgw.unwrap_or("off").into()),
             ("context bar", if bars()[0] { "on" } else { "off" }.into()),
             ("5h bar", if bars()[1] { "on" } else { "off" }.into()),
@@ -1039,6 +1040,14 @@ impl App {
             ("opacity", format!("{}%", opac())),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
+    }
+
+    pub fn cycleff(&mut self, up: bool) {
+        let n = EFF.len() + 1;
+        let i = defeff().and_then(|e| EFF.iter().position(|x| *x == e)).map_or(0, |i| i + 1);
+        let j = if up { (i + 1) % n } else { (i + n - 1) % n };
+        setdefeff(j.checked_sub(1).map(|k| EFF[k]));
+        self.toast(format!("default effort  {}  (next session)", defeff().unwrap_or("claude")));
     }
 
     pub fn setdefmode(&mut self, i: usize) {
@@ -1970,12 +1979,13 @@ impl App {
                 KeyCode::Esc => self.ns = None,
                 KeyCode::Up => self.ns = Some(sel.saturating_sub(1)),
                 KeyCode::Down => self.ns = Some((sel + 1).min(n - 1)),
-                KeyCode::Left if (7..=12).contains(&sel) => {
-                    let j = sel - 7;
+                KeyCode::Left if sel == 3 => self.cycleff(false),
+                KeyCode::Left if (8..=13).contains(&sel) => {
+                    let j = sel - 8;
                     let n = LAYOUT[j].1.len();
                     setlay(j, (lay(j) + n - 1) % n);
                 }
-                KeyCode::Left if sel == 14 => self.setopac(false),
+                KeyCode::Left if sel == 15 => self.setopac(false),
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match sel {
                     0 if upd::managed().is_some() => {}
                     0 => {
@@ -1991,27 +2001,28 @@ impl App {
                         self.ns = None;
                         self.cmd("default-permission");
                     }
-                    3 => {
+                    3 => self.cycleff(true),
+                    4 => {
                         self.ns = None;
                         self.cmd("background");
                     }
-                    4..=6 => {
-                        let j = sel - 4;
+                    5..=7 => {
+                        let j = sel - 5;
                         let on = !bars()[j];
                         setbar(j, on);
                         self.toast(format!("{}  {}", BARS[j], if on { "on" } else { "off" }));
                     }
-                    7..=12 => {
-                        let j = sel - 7;
+                    8..=13 => {
+                        let j = sel - 8;
                         let n = LAYOUT[j].1.len();
                         setlay(j, (lay(j) + 1) % n);
                     }
-                    13 => {
+                    14 => {
                         let on = !rclick();
                         setrclick(on);
                         self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
                     }
-                    14 => self.setopac(true),
+                    15 => self.setopac(true),
                     _ => self.upcheck(true),
                 },
                 _ => {}
@@ -3282,6 +3293,26 @@ pub fn setrclick(on: bool) {
         let _ = std::fs::create_dir_all(d);
     }
     let _ = std::fs::write(&f, if on { "on" } else { "off" });
+}
+
+pub fn defeff() -> Option<&'static str> {
+    let v = std::fs::read_to_string(sys::cfgfile("effort")).unwrap_or_default();
+    EFF.iter().copied().find(|x| *x == v.trim())
+}
+
+pub fn setdefeff(e: Option<&str>) {
+    let f = sys::cfgfile("effort");
+    match e {
+        Some(e) => {
+            if let Some(d) = std::path::Path::new(&f).parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = std::fs::write(&f, e);
+        }
+        None => {
+            let _ = std::fs::remove_file(&f);
+        }
+    }
 }
 
 pub fn defmode() -> Option<usize> {
