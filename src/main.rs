@@ -144,7 +144,7 @@ fn hid(a: &App, i: usize, b: &B) -> bool {
 }
 
 fn gok(b: &B) -> bool {
-    matches!(b, B::Tl(t) if matches!(t.k, Tk::Read | Tk::Bash | Tk::Grep | Tk::Web | Tk::Oth) && t.st != St::Err && t.nm != "askuserquestion")
+    matches!(b, B::Tl(t) if matches!(t.k, Tk::Read | Tk::Grep | Tk::Web | Tk::Oth) && t.st != St::Err && t.nm != "askuserquestion")
 }
 
 fn groups(a: &App) -> Vec<Option<(usize, Vec<usize>)>> {
@@ -386,6 +386,7 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
     let m = mdt();
     let mut v: Vec<Line<'static>> = vec![];
     let mut pk = 0u8;
+    let mut tl0 = 0usize;
     let lu = a.bs.iter().rposition(|b| matches!(b, B::U(..)));
     let fly = a.ts > 0 && a.hist.last().is_some_and(|h| !h.starts_with('/'));
     let gs = groups(a);
@@ -397,10 +398,11 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
             if *s0 != i {
                 continue;
             }
-            if !v.is_empty() && pk != 4 {
+            if !v.is_empty() && (pk != 4 || v.len() > tl0 + 1) {
                 v.push(Line::default());
             }
             pk = 4;
+            tl0 = v.len();
             v.extend(gline(a, ix, w));
             continue;
         }
@@ -413,13 +415,14 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
             B::Sys(_) | B::Qa(..) => 5,
             B::Rc(..) => 6,
         };
-        if !v.is_empty() && k != 6 && (k != pk || k == 1 || k == 2) {
+        if !v.is_empty() && k != 6 && (k != pk || k == 1 || k == 2 || (k == 4 && v.len() > tl0 + 1)) {
             v.push(Line::default());
             if k == 1 {
                 v.push(Line::default());
             }
         }
         pk = k;
+        tl0 = v.len();
         match b {
             B::U(s, _) => {
                 let el = if fly && lu == Some(i) { a.t.saturating_sub(a.ts) * 3 } else { u64::MAX / 2 };
@@ -486,6 +489,10 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                     r.push(pad(1));
                     r.extend(decode(de, ef.saturating_sub(2), a.t, sd + 5, st(RD()), &gd()));
                     r
+                } else if t.k == Tk::Bash && !a.open {
+                    let n = t.body.len();
+                    let s = if n == 0 { "no output".to_string() } else if n == 1 { "1 line".into() } else { format!("{n} lines") };
+                    decode(&s, ef, a.t, sd, st(FA()), &gd())
                 } else {
                     decode(&t.sum, ef, a.t, sd, st(FA()), &gd())
                 };
@@ -502,13 +509,32 @@ fn body(a: &App, w: usize) -> Vec<Line<'static>> {
                     v.push(line);
                 }
                 if t.k == Tk::Task && t.st == St::Run && !a.open {
-                    for l in t.body.iter().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
-                        if let Ln::P(x) = l {
+                    let ps: Vec<&String> = t.body.iter().filter_map(|l| if let Ln::P(x) = l { Some(x) } else { None }).collect();
+                    if ps.len() > 3 {
+                        v.push(Line::from(vec![pad(4), Span::styled("| ", st(FA())), Span::styled(format!("+{} more tool uses", ps.len() - 3), st(FA()).italic())]));
+                    }
+                    for x in ps.iter().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+                        let mut x = (*x).clone();
+                        if x.chars().count() > w.saturating_sub(10) {
+                            x = x.chars().take(w.saturating_sub(11)).collect::<String>() + "~";
+                        }
+                        v.push(Line::from(vec![pad(4), Span::styled("| ", st(FA())), Span::styled(x, st(FA()))]));
+                    }
+                }
+                if t.k == Tk::Bash && t.st == St::Ok && !a.open && !t.body.is_empty() {
+                    let n = t.body.len();
+                    let k = if n > 5 { 4 } else { n };
+                    if n > k {
+                        v.push(Line::from(vec![pad(4), Span::styled("| ", st(FA())), Span::styled(format!("+{} lines · ctrl+o", n - k), st(FA()).italic())]));
+                    }
+                    for ln in &t.body[n - k..] {
+                        if let Ln::P(x) = ln {
                             let mut x = x.clone();
-                            if x.chars().count() > w.saturating_sub(10) {
-                                x = x.chars().take(w.saturating_sub(11)).collect::<String>() + "~";
+                            if x.chars().count() > w.saturating_sub(8) {
+                                x = x.chars().take(w.saturating_sub(9)).collect::<String>() + "~";
                             }
-                            v.push(Line::from(vec![pad(4), Span::styled("| ", st(FA())), Span::styled(x, st(FA()))]));
+                            let c = if x.contains("FAIL") || (x.contains("failed") && !x.contains(" 0 failed")) || x.starts_with("error") { RD() } else { MU() };
+                            v.push(Line::from(vec![pad(4), Span::styled("| ", st(FA())), Span::styled(x, st(c))]));
                         }
                     }
                 }
@@ -745,6 +771,20 @@ impl V for V1 {
                 ag("research: wl-clipboard on GNOME", 0, 12, 3, 7100, "WebSearch wl-copy mutter data-control"),
                 Task { id: "sh".into(), kind: 0, desc: "cargo build --release".into(), st: 0, t0: 30, ..Default::default() },
                 Task { id: "wf".into(), kind: 3, desc: "review the changes".into(), name: "deep-research".into(), st: 0, t0: 20, wf: vec![(1, 1), (2, 1), (3, 0), (4, 0), (5, 0)], phase: "Verify".into(), tools: 31, toks: 88200, ..Default::default() },
+            ];
+            a.t = a.t.max(900);
+        }
+        if s == "chat" {
+            let tl = |k: Tk, nm: &str, ar: &str, sum: &str, st: St, body: Vec<Ln>| B::Tl(noname::Tool { k, nm: nm.into(), a: ar.into(), sum: sum.into(), body, st, t0: 1, t1: 2 });
+            let p = |x: &[&str]| x.iter().map(|s| Ln::P(s.to_string())).collect::<Vec<_>>();
+            a.bs = vec![
+                B::U("compare the three renderers and run the tests".into(), String::new()),
+                B::T("Here is the comparison:\n\n| renderer | fps | memory | notes |\n|---|---:|---:|---|\n| ratatui | 60 | 2.1 MB | diffing backend, **fast** on large buffers |\n| crossterm raw | 30 | 1.4 MB | no diffing, writes every cell each frame which flickers in some terminals |\n| notcurses | 120 | 8.9 MB | `C` dependency |\n\nTests next.".into()),
+                tl(Tk::Task, "agent", "explore: where is the feed rendered", "14 tools · 32.1k tok · 45s", St::Ok, p(&["grep render  src", "read src/feed.rs"])),
+                tl(Tk::Task, "agent", "research: wl-clipboard on GNOME", "", St::Run, p(&["web wl-copy mutter data-control", "read docs/clip.md", "bash rg -n clipboard src", "web gitlab.gnome.org/GNOME/mutter/-/issues/524", "read src/img.rs"])),
+                tl(Tk::Bash, "bash", "cargo test --release 2>&1 | tail -20", "test result: ok. 14 passed; 0 failed", St::Ok, p(&["running 14 tests", "test feed::tick ... ok", "test swipe::snap ... ok", "test swipe::fling ... ok", "test md::table ... ok", "test result: ok. 14 passed; 0 failed"])),
+                tl(Tk::Bash, "bash", "git status --short", "ok", St::Ok, p(&[" M src/main.rs", " M src/lib.rs"])),
+                tl(Tk::Bash, "bash", "cargo build --release", "", St::Run, vec![]),
             ];
             a.t = a.t.max(900);
         }

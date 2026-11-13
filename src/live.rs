@@ -14,6 +14,7 @@ pub struct Lv {
     ch: Child,
     rid: u64,
     tm: HashMap<String, usize>,
+    sm: HashMap<String, String>,
     bm: HashMap<u64, usize>,
     areq: Option<(String, Value, Value)>,
     sid: String,
@@ -256,11 +257,23 @@ impl App {
         self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default()
     }
 
+    fn subtxt(&mut self, p: &str, s: &str) {
+        let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(p).copied()) else { return };
+        if let Some(B::Tl(t)) = self.bs.get_mut(i) {
+            for l in s.lines().filter(|l| !l.trim().is_empty()) {
+                t.body.push(Ln::C(0, one(l, 200)));
+            }
+            if t.body.len() > 600 {
+                t.body.drain(..t.body.len() - 600);
+            }
+        }
+    }
+
     fn subact(&mut self, p: &str, line: String) {
         if let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(p).copied()) {
             if let Some(B::Tl(t)) = self.bs.get_mut(i) {
                 t.body.push(Ln::P(one(&line, 200)));
-                if t.body.len() > 300 {
+                if t.body.len() > 600 {
                     t.body.remove(0);
                 }
             }
@@ -392,7 +405,11 @@ fn mk(name: &str, i: &Value) -> Tool {
         "Glob" => sv(i, "pattern"),
         "WebSearch" => sv(i, "query"),
         "WebFetch" => sv(i, "url"),
-        "Task" | "Agent" => sv(i, "description"),
+        "Task" | "Agent" => {
+            let ty = sv(i, "subagent_type").to_lowercase();
+            let d = sv(i, "description");
+            if ty.is_empty() || ty == "general-purpose" { d } else { format!("{ty}: {d}") }
+        }
         "Skill" => sv(i, "skill"),
         "TodoWrite" => "todos".into(),
         _ => {
@@ -491,7 +508,7 @@ impl App {
             }
         }
         let (ch, inp, rx) = spawn(&args).map_err(|e| if e.kind() == io::ErrorKind::NotFound { io::Error::new(e.kind(), "claude not found, install Claude Code first: https://claude.com/claude-code") } else { e })?;
-        a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
+        a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), sm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
         a.ctrl("init", json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}));
         let ar = a.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
@@ -908,12 +925,26 @@ impl App {
     fn ev(&mut self, e: Value) {
         let ty = e["type"].as_str().unwrap_or("").to_string();
         if let Some(p) = e.get("parent_tool_use_id").and_then(|v| v.as_str()) {
-            let p = p.to_string();
+            let mut p = p.to_string();
+            if let Some(r) = self.lv.as_ref().and_then(|l| l.sm.get(&p).cloned()) {
+                p = r;
+            }
             if e["type"] == "assistant" {
                 for c in e["message"]["content"].as_array().cloned().unwrap_or_default() {
-                    if c["type"] == "tool_use" {
-                        let t = mk(&sv(&c, "name"), &c["input"]);
-                        self.subact(&p, format!("{} {}", t.nm, t.a).trim().to_string());
+                    match c["type"].as_str().unwrap_or("") {
+                        "tool_use" => {
+                            let n = sv(&c, "name");
+                            if matches!(n.as_str(), "Task" | "Agent") {
+                                let id = sv(&c, "id");
+                                if let Some(l) = &mut self.lv {
+                                    l.sm.insert(id, p.clone());
+                                }
+                            }
+                            let t = mk(&n, &c["input"]);
+                            self.subact(&p, format!("{} {}", t.nm, t.a).trim().to_string());
+                        }
+                        "text" => self.subtxt(&p, &sv(&c, "text")),
+                        _ => {}
                     }
                 }
             }
@@ -1123,7 +1154,7 @@ impl App {
                 if let Some(a) = e["message"]["content"].as_array() {
                     for c in a.clone() {
                         if c["type"] == "tool_result" {
-                            self.tres(&c);
+                            self.tres(&c, &e["tool_use_result"]);
                         }
                     }
                 }
@@ -1379,7 +1410,7 @@ impl App {
                     Value::Array(a) => {
                         for x in a.clone() {
                             match x["type"].as_str().unwrap_or("") {
-                                "tool_result" => self.tres(&x),
+                                "tool_result" => self.tres(&x, &o["toolUseResult"]),
                                 "text" if sv(&x, "text").starts_with("[Request interrupted") => self.bs.push(B::Sys("interrupted".into())),
                                 "text" if !sv(&x, "text").starts_with('<') => self.bs.push(B::U(sv(&x, "text"), String::new())),
                                 _ => {}
@@ -1470,7 +1501,7 @@ impl App {
         let cmds = l.cmds.clone();
         let c0 = l.c0;
         let uid: HashMap<usize, String> = l.uid.iter().filter(|(k, _)| **k < i).map(|(k, v)| (*k, v.clone())).collect();
-        self.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), bm: HashMap::new(), areq: None, sid: if par.is_empty() { String::new() } else { sid }, args: base, brx: None, bch: None, tb: 0, uid, rwp: None, c0, w0: -1.0, cmds });
+        self.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), sm: HashMap::new(), bm: HashMap::new(), areq: None, sid: if par.is_empty() { String::new() } else { sid }, args: base, brx: None, bch: None, tb: 0, uid, rwp: None, c0, w0: -1.0, cmds });
         self.bs.truncate(i);
         self.ask = None;
         self.sb = None;
@@ -1586,7 +1617,7 @@ impl App {
         }
     }
 
-    fn tres(&mut self, c: &Value) {
+    fn tres(&mut self, c: &Value, m: &Value) {
         let id = sv(c, "tool_use_id");
         let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(&id).copied()) else { return };
         let err = c["is_error"] == true;
@@ -1608,8 +1639,24 @@ impl App {
             match t.k {
                 Tk::Edit => {}
                 Tk::Task => {
-                    let n = t.body.len();
-                    t.sum = if n > 0 { format!("{n} tools") } else { "done".into() };
+                    if m["status"] == "async_launched" {
+                        t.sum = "background".into();
+                        return;
+                    }
+                    let n = m["totalToolUseCount"].as_u64().unwrap_or(t.body.iter().filter(|x| matches!(x, Ln::P(_))).count() as u64);
+                    let mut s = vec![];
+                    if n > 0 {
+                        s.push(if n == 1 { "1 tool".to_string() } else { format!("{n} tools") });
+                    }
+                    if let Some(k) = m["totalTokens"].as_u64() {
+                        s.push(format!("{:.1}k tok", k as f32 / 1000.0));
+                    }
+                    let ms = m["totalDurationMs"].as_u64().unwrap_or(if t.t1 > t.t0 { (t.t1 - t.t0) * 33 } else { 0 });
+                    if ms > 0 {
+                        let sc = ms / 1000;
+                        s.push(if sc >= 60 { format!("{}m {}s", sc / 60, sc % 60) } else { format!("{sc}s") });
+                    }
+                    t.sum = if s.is_empty() { "done".into() } else { s.join(" · ") };
                 }
                 Tk::Read => t.sum = format!("{} lines", txt.lines().count()),
                 Tk::Grep => t.sum = format!("{} results", ls.len()),
@@ -1618,7 +1665,7 @@ impl App {
                         Some(l) if !l.starts_with('(') => one(l, 48),
                         _ => "ok".into(),
                     };
-                    t.body = ls.iter().rev().take(12).rev().map(|l| Ln::P(one(l, 200))).collect();
+                    t.body = ls.iter().rev().take(400).rev().map(|l| Ln::P(one(l, 200))).collect();
                 }
                 _ => {
                     t.sum = if ls.is_empty() { "done".into() } else { format!("{} lines", ls.len()) };

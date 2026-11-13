@@ -2610,10 +2610,117 @@ pub fn hl(s: &str, m: &Md) -> Vec<Span<'static>> {
     v
 }
 
+fn tcols(nat: &[usize], av: usize) -> Vec<usize> {
+    let n = nat.len();
+    if nat.iter().sum::<usize>() <= av {
+        return nat.to_vec();
+    }
+    let mut cw = vec![0; n];
+    let mut left: Vec<usize> = (0..n).collect();
+    let mut rem = av;
+    loop {
+        let sh = rem / left.len().max(1);
+        let (fit, big): (Vec<usize>, Vec<usize>) = left.iter().partition(|&&j| nat[j] <= sh);
+        if fit.is_empty() {
+            for (k, &j) in big.iter().enumerate() {
+                cw[j] = (sh + usize::from(k < rem % big.len().max(1))).max(4);
+            }
+            return cw;
+        }
+        for &j in &fit {
+            cw[j] = nat[j].max(1);
+            rem = rem.saturating_sub(cw[j]);
+        }
+        left = big;
+        if left.is_empty() {
+            return cw;
+        }
+    }
+}
+
+fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
+    let issep = |r: &str| r.trim().chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) && r.contains('-');
+    let al: Vec<bool> = rows.iter().find(|r| issep(r)).map(|r| r.trim().trim_matches('|').split('|').map(|x| { let x = x.trim(); x.ends_with(':') && !x.starts_with(':') }).collect()).unwrap_or_default();
+    let rows: Vec<&str> = rows.iter().copied().filter(|r| !issep(r)).collect();
+    let rows = &rows[..];
+    let rs: Vec<Vec<Vec<(String, Style)>>> = rows
+        .iter()
+        .map(|r| r.trim().trim_matches('|').split('|').map(|x| x.trim()).collect::<Vec<_>>())
+        .enumerate()
+        .map(|(i, cs)| cs.iter().enumerate().map(|(j, c)| inl(c, if i == 0 { m.b } else if j == 0 { m.t } else { m.fps }, m)).collect())
+        .collect();
+    let n = rs.iter().map(|r| r.len()).max().unwrap_or(0);
+    if n == 0 {
+        return;
+    }
+    let sep = 3;
+    let cwid = |c: &Vec<(String, Style)>| c.iter().map(|x| x.0.width()).sum::<usize>();
+    let nat: Vec<usize> = (0..n).map(|j| rs.iter().filter_map(|r| r.get(j)).map(cwid).max().unwrap_or(0)).collect();
+    let av = w.saturating_sub(sep * (n - 1));
+    if av < n * 6 {
+        let hd: Vec<String> = rs[0].iter().map(|c| c.iter().map(|x| x.0.clone()).collect()).collect();
+        for r in rs.iter().skip(1) {
+            for (j, c) in r.iter().enumerate() {
+                let mut sg = vec![];
+                if let Some(h) = hd.get(j).filter(|h| !h.is_empty()) {
+                    sg.push((format!("{h}: "), m.b));
+                }
+                sg.extend(c.iter().cloned());
+                let pre = if j == 0 { m.bul.to_string() } else { " ".repeat(m.bul.width()) };
+                for (k, l) in wsegs(&sg, w.saturating_sub(pre.width())).into_iter().enumerate() {
+                    let mut v = vec![Span::styled(if k == 0 { pre.clone() } else { " ".repeat(pre.width()) }, m.bs)];
+                    v.extend(l);
+                    o.push(Line::from(v));
+                }
+            }
+        }
+        return;
+    }
+    let cw = tcols(&nat, av);
+    for (i, r) in rs.iter().enumerate() {
+        let cells: Vec<Vec<Vec<Span<'static>>>> = (0..n).map(|j| r.get(j).map(|c| wsegs(c, cw[j])).unwrap_or_default()).collect();
+        let h = cells.iter().map(|c| c.len()).max().unwrap_or(1).max(1);
+        for k in 0..h {
+            let mut sp = vec![];
+            for j in 0..n {
+                if j > 0 {
+                    sp.push(Span::styled(" │ ", m.fps));
+                }
+                let l = cells[j].get(k).cloned().unwrap_or_default();
+                let lw = sw(&l);
+                let gap = Span::raw(" ".repeat(cw[j].saturating_sub(lw)));
+                if al.get(j).copied().unwrap_or(false) {
+                    sp.push(gap);
+                    sp.extend(l);
+                } else {
+                    sp.extend(l);
+                    if j + 1 < n {
+                        sp.push(gap);
+                    }
+                }
+            }
+            o.push(Line::from(sp));
+        }
+        if i == 0 && rs.len() > 1 {
+            let ru: Vec<String> = cw.iter().map(|&x| "─".repeat(x)).collect();
+            o.push(Line::from(Span::styled(ru.join("─┼─"), m.fps)));
+        }
+    }
+}
+
 pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
     let mut o = vec![];
     let mut inf = false;
+    let mut tb: Vec<&str> = vec![];
     for raw in s.lines() {
+        if !inf && raw.trim_start().starts_with('|') {
+            tb.push(raw);
+            continue;
+        }
+        if !tb.is_empty() {
+            tbl(&tb, w, m, &mut o);
+            tb.clear();
+        }
         if raw.trim_start().starts_with("```") {
             inf = !inf;
             continue;
@@ -2628,22 +2735,6 @@ pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
             o.push(Line::default());
             continue;
         }
-        if raw.trim_start().starts_with('|') {
-            let t = raw.trim();
-            if t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
-                continue;
-            }
-            let cs: Vec<&str> = t.trim_matches('|').split('|').map(|x| x.trim()).collect();
-            let mut sp = vec![];
-            for (i, c) in cs.iter().enumerate() {
-                if i > 0 {
-                    sp.push(Span::styled("  ·  ", m.fps));
-                }
-                sp.extend(inl(c, if i == 0 { m.t } else { m.fps }, m).into_iter().map(|(x, y)| Span::styled(x, y)));
-            }
-            o.push(Line::from(sp));
-            continue;
-        }
         let (pre, body) = match raw.strip_prefix("- ") {
             Some(r) => (m.bul.to_string(), r),
             None => (String::new(), raw),
@@ -2655,6 +2746,9 @@ pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
             v.extend(l);
             o.push(Line::from(v));
         }
+    }
+    if !tb.is_empty() {
+        tbl(&tb, w, m, &mut o);
     }
     let mut r: Vec<Line<'static>> = vec![];
     for l in o {
