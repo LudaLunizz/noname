@@ -1420,6 +1420,9 @@ impl V for V1 {
             5 => rows[1][2].push(Ch::S(cwd)),
             _ => {}
         }
+        if let (true, Some(n)) = (free::enabled(), a.frv) {
+            rows[1][1].push(Ch::S(vec![Span::styled("free ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]));
+        }
         let run: Vec<usize> = (0..4).map(|k| a.tasks.iter().filter(|t| t.st == 0 && t.kind == k as u8).count()).collect();
         if run.iter().sum::<usize>() > 0 {
             let mut sp = noise(1, a.t, 420, &gd());
