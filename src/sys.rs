@@ -166,7 +166,13 @@ pub fn on_close(f: fn()) {
 pub fn on_close(f: fn()) {
     let _ = job();
     let _ = HANDLER.set(f);
-    unsafe extern "system" fn h(_: u32) -> i32 {
+    unsafe extern "system" fn h(ty: u32) -> i32 {
+        // Ctrl+C does not close noname at once: the main loop picks it up through ctrlc()
+        // and handles it like the key (first press interrupts, second press exits).
+        if ty == win::CTRL_C_EVENT && CATCH.load(std::sync::atomic::Ordering::SeqCst) {
+            CTRLC.store(true, std::sync::atomic::Ordering::SeqCst);
+            return 1;
+        }
         if let Some(f) = HANDLER.get() {
             f();
         }
@@ -179,6 +185,30 @@ pub fn on_close(f: fn()) {
 
 #[cfg(windows)]
 static HANDLER: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+static CTRLC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+static CATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// While on (the main loop runs), a Ctrl+C signal is passed on to ctrlc() instead of
+/// closing noname. Off again while noname shuts down, so Ctrl+C there still ends it.
+pub fn catch_ctrlc(on: bool) {
+    #[cfg(windows)]
+    CATCH.store(on, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(not(windows))]
+    let _ = on;
+}
+
+/// True once after the console sent a Ctrl+C signal (Windows). In raw mode Ctrl+C normally
+/// comes in as a key; the signal only arrives when the console still processes it.
+pub fn ctrlc() -> bool {
+    #[cfg(windows)]
+    return CTRLC.swap(false, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(not(windows))]
+    false
+}
 
 #[cfg(windows)]
 fn job() -> isize {
@@ -197,7 +227,7 @@ fn job() -> isize {
 
 #[cfg(windows)]
 mod win {
-    pub use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+    pub use windows_sys::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
     pub use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
