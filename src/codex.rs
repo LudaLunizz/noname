@@ -108,6 +108,10 @@ impl App {
         Ok(a)
     }
 
+    pub fn is_opencode(&self) -> bool {
+        self.cx.as_ref().is_some_and(|c| c.oc)
+    }
+
     pub(crate) fn eng(&self) -> &'static str {
         if self.cx.as_ref().is_some_and(|c| c.oc) { "opencode" } else { "codex" }
     }
