@@ -1233,7 +1233,7 @@ impl App {
                         let v: Vec<(String, String, String, Vec<String>)> = ms.iter().filter(|m| m["disabled"] != true).map(|m| (sv(m, "value"), sv(m, "displayName"), sv(m, "description"), m["supportedEffortLevels"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(str::to_string)).collect())).collect();
                         if !v.is_empty() {
                             let mut v = v;
-                            for (id, d) in MID_ALL.iter().skip(4) {
+                            for (id, d) in MID_ALL.iter() {
                                 if !v.iter().any(|m| m.0 == *id || m.1 == *d) {
                                     v.push((id.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect()));
                                 }
