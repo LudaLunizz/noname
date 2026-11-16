@@ -923,7 +923,12 @@ impl App {
                 }
                 b.fin = true;
             }
-            "_eof" => b.fin = true,
+            "_eof" => {
+                b.fin = true;
+                if let Some(mut c) = self.lv.as_mut().and_then(|l| l.bch.take()) {
+                    reap(&mut c);
+                }
+            }
             _ => {}
         }
     }
