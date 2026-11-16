@@ -1478,8 +1478,10 @@ impl V for V1 {
             // on the right-hand side the totals sit 4 columns further left of the effort label
             let mr = m.as_ref().map(|_| {
                 let mut v = mid.clone();
-                // "medium" is two letters longer than "high": one column less so the gap looks the same
-                v.push(pad(if a.effs == "medium" { 3 } else { 4 }));
+                // "medium" is two letters longer than "high": one column less so the gap looks the same,
+                // and one more less while shells are listed, or the label gets cut off
+                let gap = if a.effs == "medium" { if run.iter().sum::<usize>() > 0 { 2 } else { 3 } } else { 4 };
+                v.push(pad(gap));
                 Ch::S(v)
             });
             match lay(1) {
