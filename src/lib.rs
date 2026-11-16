@@ -2374,6 +2374,18 @@ impl App {
     }
 }
 
+/// Windows reports AltGr as Ctrl+Alt, so AltGr+A on a Polish layout comes in as Ctrl+Alt+'ą'
+/// and was dropped as a shortcut. A Ctrl+Alt key that carries a printable character other than
+/// an ASCII letter or digit (those are real Ctrl+Alt shortcuts) is typed text: drop Ctrl and Alt.
+pub fn altgr(mut k: KeyEvent) -> KeyEvent {
+    if let KeyCode::Char(c) = k.code {
+        if k.modifiers.contains(Km::CONTROL | Km::ALT) && !c.is_control() && !c.is_whitespace() && !c.is_ascii_alphanumeric() {
+            k.modifiers.remove(Km::CONTROL | Km::ALT);
+        }
+    }
+    k
+}
+
 fn one_line(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("").trim();
     if l.chars().count() > n { l.chars().take(n - 1).collect::<String>() + "…" } else { l.to_string() }
@@ -3135,6 +3147,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
         while event::poll(dl.saturating_duration_since(Instant::now()))? {
             match event::read()? {
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    let k = altgr(k);
                     a.dn = false;
                     if !a.seld {
                         a.msel = None;
@@ -3829,4 +3842,34 @@ pub fn decode(s: &str, el: u64, t: u64, seed: u64, done: Style, cs: &[Color]) ->
         v.push(Span::styled(run, done));
     }
     v
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    fn ev(c: char, m: Km) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), m)
+    }
+
+    #[test]
+    fn altgr_letters_are_typed() {
+        // Polish AltGr letters as crossterm reports them on Windows: Ctrl+Alt (+Shift for capitals)
+        let mut a = App::new();
+        for (c, m) in [('ą', Km::CONTROL | Km::ALT), ('ż', Km::CONTROL | Km::ALT), ('Ł', Km::CONTROL | Km::ALT | Km::SHIFT), ('@', Km::CONTROL | Km::ALT), ('€', Km::CONTROL | Km::ALT)] {
+            a.key(altgr(ev(c, m)));
+        }
+        assert_eq!(a.inp, "ążŁ@€");
+        assert_eq!(altgr(ev('Ł', Km::CONTROL | Km::ALT | Km::SHIFT)).modifiers, Km::SHIFT);
+    }
+
+    #[test]
+    fn real_shortcuts_stay_shortcuts() {
+        for k in [ev('a', Km::CONTROL | Km::ALT), ev('7', Km::CONTROL | Km::ALT), ev(' ', Km::CONTROL | Km::ALT), ev('c', Km::CONTROL), ev('ą', Km::CONTROL), ev('b', Km::ALT)] {
+            assert_eq!(altgr(k), k);
+        }
+        let mut a = App::new();
+        a.key(altgr(ev('a', Km::CONTROL | Km::ALT)));
+        assert_eq!(a.inp, "");
+    }
 }
