@@ -1475,13 +1475,19 @@ impl V for V1 {
         }
         if let Some(e) = eff {
             let m = (!mid.is_empty() && by_eff).then(|| Ch::S(mid.clone()));
+            // on the right-hand side the totals sit 7 columns further left of the effort label
+            let mr = m.as_ref().map(|_| {
+                let mut v = mid.clone();
+                v.push(pad(7));
+                Ch::S(v)
+            });
             match lay(1) {
-                0 => rows[1][2].extend(m.into_iter().chain([Ch::S(e)])),
+                0 => rows[1][2].extend(mr.into_iter().chain([Ch::S(e)])),
                 1 => {
                     rows[1][0].insert(0, Ch::S(e));
                     rows[1][0].splice(1..1, m);
                 }
-                2 => rows[0][2].extend(m.into_iter().chain([Ch::S(e)])),
+                2 => rows[0][2].extend(mr.into_iter().chain([Ch::S(e)])),
                 3 => {
                     rows[0][0].insert(0, Ch::S(e));
                     rows[0][0].splice(1..1, m);
