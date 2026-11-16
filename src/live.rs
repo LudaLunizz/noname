@@ -1399,6 +1399,9 @@ impl App {
             }
             "_eof" => {
                 self.busy = false;
+                if let Some(l) = &mut self.lv {
+                    reap(&mut l.ch);
+                }
                 self.bs.push(B::Sys("claude exited".into()));
             }
             _ => {}
