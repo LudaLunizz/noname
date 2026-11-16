@@ -381,6 +381,8 @@ pub struct App {
     pub clv: Option<u64>,
     clat: Option<Instant>,
     le: u64,
+    /// Tick of the last Ctrl+C press (0 = none): a second press within CC_WIN ticks exits.
+    cc: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub pst: Vec<String>,
     pub fs: Option<(String, usize)>,
@@ -649,6 +651,7 @@ impl App {
             clv: None,
             clat: None,
             le: 0,
+            cc: 0,
             imgs: vec![],
             pst: vec![],
             fs: None,
@@ -1986,28 +1989,58 @@ impl App {
         }
     }
 
+    /// Clears the input box and keeps what was there in the history.
+    fn clearinp(&mut self) {
+        let s = std::mem::take(&mut self.inp);
+        if self.hist.last() != Some(&s) {
+            self.hist.push(s);
+        }
+        self.hi = None;
+        self.drf = None;
+        self.cur = 0
+    }
+
+    /// Ctrl+C as in Claude Code: the first press interrupts a running turn or clears the
+    /// input and shows a hint; a second press within CC_WIN ticks (~2 s) exits.
+    fn ctrlc(&mut self) {
+        if self.cc > 0 && self.t.saturating_sub(self.cc) <= CC_WIN {
+            self.quit = true;
+            return;
+        }
+        self.cc = self.t.max(1);
+        let menu = self.fs.is_some() || self.rw.is_some() || self.qa.is_some() || self.pk.is_some() || self.tk.is_some() || self.ns.is_some() || self.pp.is_some() || self.tp.is_some() || self.bp.is_some() || self.rs.is_some();
+        if !menu {
+            if self.busy {
+                self.stop()
+            } else if !self.inp.is_empty() {
+                self.clearinp()
+            }
+        }
+        self.toast("press ctrl+c again to exit");
+    }
+
     fn key0(&mut self, k: KeyEvent) {
         let ct = k.modifiers.contains(Km::CONTROL);
-        if self.fs.is_some() && !(ct && k.code == KeyCode::Char('c')) {
+        if ct && k.code == KeyCode::Char('c') {
+            self.ctrlc();
+            return;
+        }
+        if self.fs.is_some() {
             self.fskey(k);
             return;
         }
-        if self.rw.is_some() && !(ct && k.code == KeyCode::Char('c')) {
+        if self.rw.is_some() {
             self.rwkey(k);
             return;
         }
-        if self.qa.is_some() && !(ct && k.code == KeyCode::Char('c')) && self.qkey(k) {
+        if self.qa.is_some() && self.qkey(k) {
             return;
         }
-        if self.pk.is_some() && !(ct && k.code == KeyCode::Char('c')) {
+        if self.pk.is_some() {
             self.pkkey(k);
             return;
         }
         if let Some((sel, det)) = self.tk {
-            if ct && k.code == KeyCode::Char('c') {
-                self.quit = true;
-                return;
-            }
             let n = self.tasks.len();
             if n == 0 {
                 self.tk = None;
@@ -2034,10 +2067,6 @@ impl App {
             return;
         }
         if let Some(sel) = self.ns {
-            if ct && k.code == KeyCode::Char('c') {
-                self.quit = true;
-                return;
-            }
             let n = self.nrows().len();
             match k.code {
                 KeyCode::Esc => self.ns = None,
@@ -2106,10 +2135,6 @@ impl App {
             return;
         }
         if let Some(sel) = self.pp {
-            if ct && k.code == KeyCode::Char('c') {
-                self.quit = true;
-                return;
-            }
             match k.code {
                 KeyCode::Esc => self.pp = None,
                 KeyCode::Up => self.pp = Some(sel.saturating_sub(1)),
@@ -2123,10 +2148,6 @@ impl App {
             return;
         }
         if let Some((sel, prev)) = self.tp {
-            if ct && k.code == KeyCode::Char('c') {
-                self.quit = true;
-                return;
-            }
             let n = pal::all().len();
             match k.code {
                 KeyCode::Esc => {
@@ -2147,10 +2168,6 @@ impl App {
             return;
         }
         if let Some((sel, prev)) = self.bp {
-            if ct && k.code == KeyCode::Char('c') {
-                self.quit = true;
-                return;
-            }
             let v = bg::avail();
             let pv = |i: usize| if v[i] == "off" { None } else { Some(v[i]) };
             match k.code {
@@ -2171,7 +2188,7 @@ impl App {
             }
             return;
         }
-        if self.rs.is_some() && !(ct && k.code == KeyCode::Char('c')) {
+        if self.rs.is_some() {
             let hits = self.rhits();
             let Some((_, sel)) = &mut self.rs else { return };
             match k.code {
@@ -2203,7 +2220,6 @@ impl App {
             return;
         }
         match k.code {
-            KeyCode::Char('c') if ct => self.quit = true,
             KeyCode::Up if k.modifiers.contains(Km::ALT) => self.jump(true),
             KeyCode::Down if k.modifiers.contains(Km::ALT) => self.jump(false),
             KeyCode::Char('f') if ct => self.fs = Some((String::new(), 0)),
@@ -2216,13 +2232,7 @@ impl App {
                 } else if self.busy {
                     self.stop()
                 } else if !self.inp.is_empty() {
-                    let s = std::mem::take(&mut self.inp);
-                    if self.hist.last() != Some(&s) {
-                        self.hist.push(s);
-                    }
-                    self.hi = None;
-                    self.drf = None;
-                    self.cur = 0
+                    self.clearinp()
                 } else if dbl && !self.users().is_empty() {
                     self.rw = Some((self.users().len() - 1, None));
                     self.le = 0;
@@ -3076,6 +3086,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     let mut sk = 0u32;
     let shot = std::env::var("NONAME_SHOT").ok();
     sys::on_close(bye);
+    sys::catch_ctrlc(true);
     upd::cleanup();
     if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
         a.upcheck(false);
@@ -3140,6 +3151,9 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             }
             term.clear()?;
             pv = None;
+        }
+        if sys::ctrlc() {
+            a.key(KeyEvent::new(KeyCode::Char('c'), Km::CONTROL));
         }
         let slow = sk >= 15 && !a.seld;
         let t0 = Instant::now();
@@ -3291,6 +3305,7 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     }
     // give the terminal back before stopping claude (that can take a second), so a
     // second ctrl+c or mouse movement in that time does not land in a half-restored screen
+    sys::catch_ctrlc(false);
     let _ = restore();
     Ok(if std::env::var("NONAME_MOCK").is_ok() { String::new() } else { a.session_id() })
 }
@@ -3522,6 +3537,8 @@ fn editor(s: &str) -> Option<String> {
     let _ = restore();
     let mut v = ed.split_whitespace();
     let ok = std::process::Command::new(v.next().unwrap_or("vi")).args(v).arg(&f).status().is_ok_and(|x| x.success());
+    // a Ctrl+C pressed in the editor belongs to the editor, not to noname
+    let _ = sys::ctrlc();
     let _ = enable_raw_mode();
     let mut out = io::stdout();
     let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
@@ -3533,6 +3550,70 @@ fn editor(s: &str) -> Option<String> {
     let r = if ok { std::fs::read_to_string(&f).ok() } else { None };
     let _ = std::fs::remove_file(&f);
     r
+}
+
+/// Ticks (~33 ms) in which a second Ctrl+C exits: as long as the "press again" toast shows.
+const CC_WIN: u64 = 60;
+
+#[cfg(test)]
+mod ctrlc_tests {
+    use super::*;
+
+    fn cc(a: &mut App) {
+        a.key(KeyEvent::new(KeyCode::Char('c'), Km::CONTROL));
+    }
+
+    #[test]
+    fn second_press_exits() {
+        let mut a = App::new();
+        a.t = 100;
+        cc(&mut a);
+        assert!(!a.quit);
+        assert!(a.toast.as_ref().is_some_and(|t| t.0.contains("again to exit")));
+        a.t += CC_WIN;
+        cc(&mut a);
+        assert!(a.quit);
+    }
+
+    #[test]
+    fn first_press_clears_input_and_late_press_starts_over() {
+        let mut a = App::new();
+        a.t = 100;
+        a.inp = "half a prompt".into();
+        a.cur = 4;
+        cc(&mut a);
+        assert!(!a.quit);
+        assert_eq!((a.inp.as_str(), a.cur), ("", 0));
+        assert_eq!(a.hist.last().map(String::as_str), Some("half a prompt"));
+        a.t += CC_WIN + 1;
+        cc(&mut a);
+        assert!(!a.quit);
+        a.t += 1;
+        cc(&mut a);
+        assert!(a.quit);
+    }
+
+    #[test]
+    fn first_press_interrupts_a_turn() {
+        let mut a = App::new();
+        a.busy = true;
+        a.inp = "next".into();
+        cc(&mut a);
+        assert!(!a.quit && !a.busy);
+        assert_eq!(a.inp, "next");
+    }
+
+    #[test]
+    fn open_menu_needs_two_presses_too() {
+        let mut a = App::new();
+        a.ns = Some(0);
+        a.inp = "keep".into();
+        cc(&mut a);
+        assert!(!a.quit);
+        assert_eq!(a.inp, "keep");
+        cc(&mut a);
+        assert!(a.quit);
+    }
 }
 
 /// True while noname has the terminal (raw mode, alternate screen, pushed title and keys).
