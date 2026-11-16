@@ -1475,10 +1475,10 @@ impl V for V1 {
         }
         if let Some(e) = eff {
             let m = (!mid.is_empty() && by_eff).then(|| Ch::S(mid.clone()));
-            // on the right-hand side the totals sit 7 columns further left of the effort label
+            // on the right-hand side the totals sit 5 columns further left of the effort label
             let mr = m.as_ref().map(|_| {
                 let mut v = mid.clone();
-                v.push(pad(7));
+                v.push(pad(5));
                 Ch::S(v)
             });
             match lay(1) {
