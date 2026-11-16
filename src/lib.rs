@@ -375,6 +375,10 @@ pub struct App {
     pub frr: Option<std::sync::mpsc::Receiver<Option<u64>>>,
     pub frv: Option<u64>,
     frat: Option<Instant>,
+    /// The same three for the Claude token total.
+    pub clr: Option<std::sync::mpsc::Receiver<Option<u64>>>,
+    pub clv: Option<u64>,
+    clat: Option<Instant>,
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub pst: Vec<String>,
@@ -640,6 +644,9 @@ impl App {
             frr: None,
             frv: None,
             frat: None,
+            clr: None,
+            clv: None,
+            clat: None,
             le: 0,
             imgs: vec![],
             pst: vec![],
@@ -712,6 +719,7 @@ impl App {
             }
         }
         self.frpoll();
+        self.clpoll();
         if let Some(r) = &self.upr {
             if let Ok(u) = r.try_recv() {
                 self.upr = None;
@@ -1039,6 +1047,28 @@ impl App {
         }
     }
 
+    /// Same for the Claude token total, read once a minute while its option is on.
+    fn clpoll(&mut self) {
+        if let Some(r) = &self.clr {
+            if let Ok(v) = r.try_recv() {
+                self.clr = None;
+                if v.is_some() {
+                    self.clv = v;
+                }
+            }
+            return;
+        }
+        if !free::claude_enabled() {
+            self.clv = None;
+            self.clat = None;
+            return;
+        }
+        if self.clat.is_none_or(|t| t.elapsed() >= free::CLAUDE_EVERY) {
+            self.clat = Some(Instant::now());
+            self.clr = Some(free::fetch_claude());
+        }
+    }
+
     pub fn upcheck(&mut self, force: bool) {
         if self.upr.is_some() {
             return;
@@ -1070,6 +1100,7 @@ impl App {
             ("right-click paste", if rclick() { "on" } else { "off" }.into()),
             ("opacity", format!("{}%", opac())),
             ("free tokens", if free::enabled() { "on, middle of the footer" } else { "off" }.into()),
+            ("claude tokens", if free::claude_enabled() { "on, after the free total" } else { "off" }.into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -2060,6 +2091,12 @@ impl App {
                         free::set_enabled(on);
                         self.frat = None;
                         self.toast(format!("free tokens  {}", if on { "on" } else { "off" }));
+                    }
+                    17 => {
+                        let on = !free::claude_enabled();
+                        free::set_claude_enabled(on);
+                        self.clat = None;
+                        self.toast(format!("claude tokens  {}", if on { "on" } else { "off" }));
                     }
                     _ => self.upcheck(true),
                 },

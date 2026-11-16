@@ -1420,8 +1420,18 @@ impl V for V1 {
             5 => rows[1][2].push(Ch::S(cwd)),
             _ => {}
         }
+        let mut mid: Vec<Span<'static>> = vec![];
         if let (true, Some(n)) = (free::enabled(), a.frv) {
-            rows[1][1].push(Ch::S(vec![Span::styled("free ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]));
+            mid.extend([Span::styled("free ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]);
+        }
+        if let (true, Some(n)) = (free::claude_enabled(), a.clv) {
+            if !mid.is_empty() {
+                mid.push(pad(3));
+            }
+            mid.extend([Span::styled("claude ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]);
+        }
+        if !mid.is_empty() {
+            rows[1][1].push(Ch::S(mid));
         }
         let run: Vec<usize> = (0..4).map(|k| a.tasks.iter().filter(|t| t.st == 0 && t.kind == k as u8).count()).collect();
         if run.iter().sum::<usize>() > 0 {

@@ -2,7 +2,9 @@
 //!
 //! Off by default (`free-tokens` in the config folder: `on` / `off`). The number comes from the
 //! `free-usage --json` command, which reads the pool's request log read-only; noname never opens
-//! the log itself and sends nothing over the network.
+//! the log itself and sends nothing over the network. A second option (`claude-tokens`) adds the
+//! all-time total of Claude tokens from `claude-usage --json` after it, with the same spacing as
+//! the usage bars.
 
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
@@ -25,6 +27,28 @@ pub fn set_enabled(on: bool) {
     let _ = std::fs::write(&f, if on { "on" } else { "off" });
 }
 
+/// Seconds between two reads of Claude's own total (it only changes when a turn ends).
+pub const CLAUDE_EVERY: Duration = Duration::from_secs(60);
+
+/// The second option: the all-time total of Claude tokens, shown after the free total.
+pub fn claude_enabled() -> bool {
+    std::fs::read_to_string(sys::cfgfile("claude-tokens")).map(|s| s.trim() == "on").unwrap_or(false)
+}
+
+pub fn set_claude_enabled(on: bool) {
+    let f = sys::cfgfile("claude-tokens");
+    if let Some(d) = std::path::Path::new(&f).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&f, if on { "on" } else { "off" });
+}
+
+/// Total tokens from the JSON that `claude-usage --json` prints.
+pub fn parse_claude(json: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    v.get("total_tokens")?.as_u64()
+}
+
 /// All-time tokens from the JSON that `free-usage --json` prints.
 pub fn parse(json: &str) -> Option<u64> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
@@ -41,9 +65,9 @@ pub fn short(n: u64) -> String {
     }
 }
 
-fn read() -> Option<u64> {
-    let local = format!("{}/.local/bin/free-usage", sys::home());
-    let cmd = if std::path::Path::new(&local).exists() { local } else { "free-usage".to_string() };
+fn run(name: &str, parse: fn(&str) -> Option<u64>) -> Option<u64> {
+    let local = format!("{}/.local/bin/{name}", sys::home());
+    let cmd = if std::path::Path::new(&local).exists() { local } else { name.to_string() };
     let out = Command::new(cmd).arg("--json").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     if !out.status.success() {
         return None;
@@ -55,7 +79,16 @@ fn read() -> Option<u64> {
 pub fn fetch() -> Receiver<Option<u64>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(read());
+        let _ = tx.send(run("free-usage", parse));
+    });
+    rx
+}
+
+/// Same for `claude-usage --json`.
+pub fn fetch_claude() -> Receiver<Option<u64>> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run("claude-usage", parse_claude));
     });
     rx
 }
@@ -78,10 +111,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_claude_total() {
+        assert_eq!(parse_claude(r#"{"total_tokens":8964150783,"through":"2026-11-14"}"#), Some(8_964_150_783));
+        assert_eq!(parse_claude("{}"), None);
+        assert_eq!(parse_claude("nope"), None);
+    }
+
+    #[test]
     fn shortens_numbers() {
         assert_eq!(short(950), "950");
         assert_eq!(short(481_673), "481.7k");
         assert_eq!(short(2_870_620), "2.87M");
         assert_eq!(short(3_100_000_000), "3.10B");
+        assert_eq!(short(8_964_150_783), "8.96B");
     }
 }
