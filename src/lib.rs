@@ -3,6 +3,7 @@ pub mod img;
 pub mod sys;
 pub mod upd;
 mod codex;
+mod opencode;
 mod live;
 
 use std::cell::Cell;
@@ -2970,10 +2971,13 @@ impl std::hash::Hasher for Fx {
 
 fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cx = args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
-    let args: Vec<String> = args.into_iter().filter(|x| x != "--codex").collect();
+    let oc = args.iter().any(|x| x == "--opencode") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "opencode");
+    let cx = oc || args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
+    let args: Vec<String> = args.into_iter().filter(|x| x != "--codex" && x != "--opencode").collect();
     let mut a = if std::env::var("NONAME_MOCK").is_ok() {
         App::new()
+    } else if oc {
+        App::opencode(args)?
     } else if cx {
         App::codex(args)?
     } else {

@@ -29,7 +29,7 @@ noname is a terminal UI (TUI) for [Claude Code](https://claude.com/claude-code),
 - live context and limit bars, cost under every answer
 - themes (default, dracula, tokyo-night, catppuccin mocha, or your own), animated backgrounds, self updates
 - image paste, `@` file mentions, background shells and subagents, `/diff`, `/mcp`, `/resume`
-- Linux, macOS and Windows; optional Codex engine with `--codex`
+- Linux, macOS and Windows; optional Codex engine with `--codex` and opencode engine with `--opencode`
 
 ## Install
 
@@ -49,6 +49,7 @@ noname              # new session
 noname -c           # continue the latest session
 noname -r <id>      # resume a session
 noname --codex      # use Codex as the engine
+noname --opencode   # use opencode as the engine (one `opencode run` per message)
 ```
 
 Other flags go straight to `claude`.

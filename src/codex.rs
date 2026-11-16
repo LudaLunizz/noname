@@ -9,13 +9,15 @@ use serde_json::{Value, json};
 use super::*;
 
 pub struct Cx {
-    tid: Option<String>,
+    pub(crate) tid: Option<String>,
     ch: Option<Child>,
     rx: Option<Receiver<Value>>,
-    args: Vec<String>,
-    im: HashMap<String, usize>,
-    last: bool,
-    t0: u64,
+    pub(crate) args: Vec<String>,
+    pub(crate) im: HashMap<String, usize>,
+    pub(crate) last: bool,
+    pub(crate) t0: u64,
+    pub(crate) oc: bool,
+    pub(crate) tok: u64,
 }
 
 impl Drop for Cx {
@@ -26,11 +28,11 @@ impl Drop for Cx {
     }
 }
 
-fn sv(v: &Value, k: &str) -> String {
+pub(crate) fn sv(v: &Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
 }
 
-fn one(s: &str, n: usize) -> String {
+pub(crate) fn one(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("").trim();
     if l.chars().count() > n { l.chars().take(n).collect::<String>() + "…" } else { l.to_string() }
 }
@@ -91,8 +93,23 @@ impl App {
         a.effs = String::new();
         a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
         a.mode = crate::defmode().unwrap_or(0);
-        a.cx = Some(Cx { tid, ch: None, rx: None, args: rest, im: HashMap::new(), last, t0: 0 });
+        a.cx = Some(Cx { tid, ch: None, rx: None, args: rest, im: HashMap::new(), last, t0: 0, oc: false, tok: 0 });
         Ok(a)
+    }
+
+    pub fn opencode(args: Vec<String>) -> io::Result<App> {
+        let mut a = App::codex(args)?;
+        if let Some(c) = &mut a.cx {
+            c.oc = true;
+        }
+        if !a.cx.as_ref().is_some_and(|c| c.args.iter().any(|x| x == "-m")) {
+            a.mname = crate::opencode::cfg_model();
+        }
+        Ok(a)
+    }
+
+    pub(crate) fn eng(&self) -> &'static str {
+        if self.cx.as_ref().is_some_and(|c| c.oc) { "opencode" } else { "codex" }
     }
 
     pub fn is_codex(&self) -> bool {
@@ -101,7 +118,7 @@ impl App {
 
     pub(crate) fn csubmit(&mut self, s: String) {
         if self.busy {
-            self.toast("codex is busy");
+            self.toast(format!("{} is busy", self.eng()));
             return;
         }
         self.t0 = self.t;
@@ -111,47 +128,54 @@ impl App {
         let t = self.t;
         let imgs: Vec<(&'static str, Vec<u8>)> = self.content(&s).unwrap_or_default().into_iter().map(|(m, b)| (m, b.to_vec())).collect();
         let x = self.expand(&s);
+        let nm = self.eng();
         let Some(c) = &mut self.cx else { return };
-        let mut cmd = Command::new(crate::sys::bin("codex"));
-        cmd.arg("exec");
-        let resume = c.tid.is_some() || c.last;
-        if resume {
-            cmd.arg("resume");
-        }
-        cmd.args(["--json", "--skip-git-repo-check"]);
-        match mode {
-            1 => {
-                cmd.args(["-s", "read-only"]);
+        c.tok = 0;
+        let mut cmd = if c.oc {
+            crate::opencode::build(c, mode, &imgs, t, &x)
+        } else {
+            let mut cmd = Command::new(crate::sys::bin("codex"));
+            cmd.arg("exec");
+            let resume = c.tid.is_some() || c.last;
+            if resume {
+                cmd.arg("resume");
             }
-            3 => {
-                cmd.arg("--dangerously-bypass-approvals-and-sandbox");
+            cmd.args(["--json", "--skip-git-repo-check"]);
+            match mode {
+                1 => {
+                    cmd.args(["-s", "read-only"]);
+                }
+                3 => {
+                    cmd.arg("--dangerously-bypass-approvals-and-sandbox");
+                }
+                _ => {
+                    cmd.args(["-s", "workspace-write"]);
+                }
             }
-            _ => {
-                cmd.args(["-s", "workspace-write"]);
+            cmd.args(&c.args);
+            for (k, (m, b)) in imgs.iter().enumerate() {
+                let f = std::env::temp_dir().join(format!("noname-{}-{t}-{k}.{}", std::process::id(), crate::img::ext(m)));
+                if std::fs::write(&f, b).is_ok() {
+                    cmd.arg("-i").arg(f);
+                }
             }
-        }
-        cmd.args(&c.args);
-        for (k, (m, b)) in imgs.iter().enumerate() {
-            let f = std::env::temp_dir().join(format!("noname-{}-{t}-{k}.{}", std::process::id(), crate::img::ext(m)));
-            if std::fs::write(&f, b).is_ok() {
-                cmd.arg("-i").arg(f);
+            match (&c.tid, c.last) {
+                (Some(id), _) => {
+                    cmd.arg(id);
+                }
+                (None, true) => {
+                    cmd.arg("--last");
+                }
+                _ => {}
             }
-        }
-        match (&c.tid, c.last) {
-            (Some(id), _) => {
-                cmd.arg(id);
-            }
-            (None, true) => {
-                cmd.arg("--last");
-            }
-            _ => {}
-        }
-        cmd.arg(&x);
+            cmd.arg(&x);
+            cmd
+        };
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
         live::guard_pub(&mut cmd);
         let Ok(mut ch) = cmd.spawn() else {
             self.busy = false;
-            self.bs.push(B::Sys("codex not found".into()));
+            self.bs.push(B::Sys(format!("{nm} not found")));
             return;
         };
         live::track_pid(ch.id() as i32);
@@ -216,7 +240,7 @@ impl App {
                 self.toast("next message resumes that session");
             }
             "quit" | "exit" => self.quit = true,
-            _ => self.toast(format!("/{c} is not available with codex")),
+            _ => self.toast(format!("/{c} is not available with {}", self.eng())),
         }
     }
 
@@ -225,12 +249,17 @@ impl App {
             Some(r) => r.try_iter().collect(),
             None => return,
         };
+        let oc = self.eng() == "opencode";
         for e in evs {
-            self.cev(e);
+            if oc {
+                self.ocev(e);
+            } else {
+                self.cev(e);
+            }
         }
     }
 
-    fn cev(&mut self, e: Value) {
+    pub(crate) fn cev(&mut self, e: Value) {
         match e["type"].as_str().unwrap_or("") {
             "thread.started" => {
                 let id = sv(&e, "thread_id");
