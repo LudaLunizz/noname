@@ -539,7 +539,7 @@ impl App {
     pub fn cmds(&self) -> Vec<(String, String)> {
         let mut v = match &self.lv {
             Some(l) if !l.cmds.is_empty() => l.cmds.clone(),
-            _ if self.is_codex() => vec![("clear".to_string(), "start a new codex thread".to_string())],
+            _ if self.is_codex() => vec![("clear".to_string(), format!("start a new {} thread", self.eng()))],
             _ => CMDS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
         };
         v.retain(|x| x.0 != "theme");
