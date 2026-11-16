@@ -1430,8 +1430,10 @@ impl V for V1 {
             }
             mid.extend([Span::styled("claude ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]);
         }
-        if !mid.is_empty() {
-            rows[1][1].push(Ch::S(mid));
+        // the totals sit next to the effort label; with no effort side (or effort by the model) they stay centred
+        let by_eff = eff.is_some() && lay(1) < 4;
+        if !mid.is_empty() && !by_eff {
+            rows[1][1].push(Ch::S(mid.clone()));
         }
         let run: Vec<usize> = (0..4).map(|k| a.tasks.iter().filter(|t| t.st == 0 && t.kind == k as u8).count()).collect();
         if run.iter().sum::<usize>() > 0 {
@@ -1472,11 +1474,18 @@ impl V for V1 {
             _ => {}
         }
         if let Some(e) = eff {
+            let m = (!mid.is_empty() && by_eff).then(|| Ch::S(mid.clone()));
             match lay(1) {
-                0 => rows[1][2].push(Ch::S(e)),
-                1 => rows[1][0].insert(0, Ch::S(e)),
-                2 => rows[0][2].push(Ch::S(e)),
-                3 => rows[0][0].insert(0, Ch::S(e)),
+                0 => rows[1][2].extend(m.into_iter().chain([Ch::S(e)])),
+                1 => {
+                    rows[1][0].insert(0, Ch::S(e));
+                    rows[1][0].splice(1..1, m);
+                }
+                2 => rows[0][2].extend(m.into_iter().chain([Ch::S(e)])),
+                3 => {
+                    rows[0][0].insert(0, Ch::S(e));
+                    rows[0][0].splice(1..1, m);
+                }
                 _ => {}
             }
         }
