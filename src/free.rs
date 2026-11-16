@@ -7,6 +7,7 @@
 //! the usage bars.
 
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
@@ -16,11 +17,28 @@ use crate::sys;
 pub const EVERY: Duration = Duration::from_secs(30);
 
 pub fn enabled() -> bool {
-    std::fs::read_to_string(sys::cfgfile("free-tokens")).map(|s| s.trim() == "on").unwrap_or(false)
+    flag(&FR, "free-tokens")
 }
 
 pub fn set_enabled(on: bool) {
-    let f = sys::cfgfile("free-tokens");
+    setflag(&FR, "free-tokens", on)
+}
+
+static FR: AtomicU8 = AtomicU8::new(u8::MAX);
+static CL: AtomicU8 = AtomicU8::new(u8::MAX);
+
+fn flag(c: &AtomicU8, k: &str) -> bool {
+    let mut m = c.load(Relaxed);
+    if m == u8::MAX {
+        m = std::fs::read_to_string(sys::cfgfile(k)).is_ok_and(|s| s.trim() == "on") as u8;
+        c.store(m, Relaxed);
+    }
+    m == 1
+}
+
+fn setflag(c: &AtomicU8, k: &str, on: bool) {
+    c.store(on as u8, Relaxed);
+    let f = sys::cfgfile(k);
     if let Some(d) = std::path::Path::new(&f).parent() {
         let _ = std::fs::create_dir_all(d);
     }
@@ -32,15 +50,11 @@ pub const CLAUDE_EVERY: Duration = Duration::from_secs(60);
 
 /// The second option: the all-time total of Claude tokens, shown after the free total.
 pub fn claude_enabled() -> bool {
-    std::fs::read_to_string(sys::cfgfile("claude-tokens")).map(|s| s.trim() == "on").unwrap_or(false)
+    flag(&CL, "claude-tokens")
 }
 
 pub fn set_claude_enabled(on: bool) {
-    let f = sys::cfgfile("claude-tokens");
-    if let Some(d) = std::path::Path::new(&f).parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    let _ = std::fs::write(&f, if on { "on" } else { "off" });
+    setflag(&CL, "claude-tokens", on)
 }
 
 /// Total tokens from the JSON that `claude-usage --json` prints.
@@ -65,7 +79,12 @@ pub fn short(n: u64) -> String {
     }
 }
 
-fn run(name: &str, parse: fn(&str) -> Option<u64>) -> Option<u64> {
+fn run(name: &str, env: &str, parse: fn(&str) -> Option<u64>) -> Option<u64> {
+    if let Some(c) = std::env::var(env).ok().filter(|c| !c.trim().is_empty()) {
+        let mut w = c.split_whitespace();
+        let out = Command::new(w.next()?).args(w).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+        return if out.status.success() { parse(&String::from_utf8_lossy(&out.stdout)) } else { None };
+    }
     let local = format!("{}/.local/bin/{name}", sys::home());
     let cmd = if std::path::Path::new(&local).exists() { local } else { name.to_string() };
     let out = Command::new(cmd).arg("--json").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
@@ -79,7 +98,7 @@ fn run(name: &str, parse: fn(&str) -> Option<u64>) -> Option<u64> {
 pub fn fetch() -> Receiver<Option<u64>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(run("free-usage", parse));
+        let _ = tx.send(run("free-usage", "NONAME_FREE_CMD", parse));
     });
     rx
 }
@@ -88,7 +107,7 @@ pub fn fetch() -> Receiver<Option<u64>> {
 pub fn fetch_claude() -> Receiver<Option<u64>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(run("claude-usage", parse_claude));
+        let _ = tx.send(run("claude-usage", "NONAME_CLAUDE_CMD", parse_claude));
     });
     rx
 }
