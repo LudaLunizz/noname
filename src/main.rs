@@ -1478,7 +1478,8 @@ impl V for V1 {
             // on the right-hand side the totals sit 4 columns further left of the effort label
             let mr = m.as_ref().map(|_| {
                 let mut v = mid.clone();
-                v.push(pad(4));
+                // "medium" is two letters longer than "high": one column less so the gap looks the same
+                v.push(pad(if a.effs == "medium" { 3 } else { 4 }));
                 Ch::S(v)
             });
             match lay(1) {
