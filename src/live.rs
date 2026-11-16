@@ -539,7 +539,7 @@ impl App {
     pub fn cmds(&self) -> Vec<(String, String)> {
         let mut v = match &self.lv {
             Some(l) if !l.cmds.is_empty() => l.cmds.clone(),
-            _ if self.is_codex() => vec![("clear".to_string(), "start a new codex thread".to_string())],
+            _ if self.is_codex() => vec![("clear".to_string(), format!("start a new {} thread", self.eng()))],
             _ => CMDS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
         };
         v.retain(|x| x.0 != "theme");
@@ -923,7 +923,12 @@ impl App {
                 }
                 b.fin = true;
             }
-            "_eof" => b.fin = true,
+            "_eof" => {
+                b.fin = true;
+                if let Some(mut c) = self.lv.as_mut().and_then(|l| l.bch.take()) {
+                    reap(&mut c);
+                }
+            }
             _ => {}
         }
     }
@@ -1228,7 +1233,7 @@ impl App {
                         let v: Vec<(String, String, String, Vec<String>)> = ms.iter().filter(|m| m["disabled"] != true).map(|m| (sv(m, "value"), sv(m, "displayName"), sv(m, "description"), m["supportedEffortLevels"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(str::to_string)).collect())).collect();
                         if !v.is_empty() {
                             let mut v = v;
-                            for (id, d) in MID_ALL.iter().skip(4) {
+                            for (id, d) in MID_ALL.iter() {
                                 if !v.iter().any(|m| m.0 == *id || m.1 == *d) {
                                     v.push((id.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect()));
                                 }
@@ -1399,6 +1404,9 @@ impl App {
             }
             "_eof" => {
                 self.busy = false;
+                if let Some(l) = &mut self.lv {
+                    reap(&mut l.ch);
+                }
                 self.bs.push(B::Sys("claude exited".into()));
             }
             _ => {}
