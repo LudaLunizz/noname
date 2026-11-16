@@ -1389,7 +1389,7 @@ impl V for V1 {
         let (h1, h2) = bar(db[1], 10, "▰", "▱");
         let (d1, d2) = bar(db[2], 10, "▰", "▱");
         let segs = [
-            vec![Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG()))],
+            vec![Span::styled(if free::enabled() && free::claude_enabled() { "" } else { "context " }, st(FA())), Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG()))],
             vec![Span::styled("5h ", st(FA())), Span::styled(h1, st(CY())), Span::styled(h2, st(FA())), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG()))],
             vec![Span::styled("week ", st(FA())), Span::styled(d1, st(CY())), Span::styled(d2, st(FA())), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG()))],
         ];
