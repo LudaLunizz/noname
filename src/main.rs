@@ -1389,7 +1389,7 @@ impl V for V1 {
         let (h1, h2) = bar(db[1], 10, "▰", "▱");
         let (d1, d2) = bar(db[2], 10, "▰", "▱");
         let segs = [
-            vec![Span::styled("context ", st(FA())), Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG()))],
+            vec![Span::styled(if free::enabled() && free::claude_enabled() { "" } else { "context " }, st(FA())), Span::styled(c1, st(LI())), Span::styled(c2, st(FA())), Span::styled(if tg[0] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[0]) }, st(FG()))],
             vec![Span::styled("5h ", st(FA())), Span::styled(h1, st(CY())), Span::styled(h2, st(FA())), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG()))],
             vec![Span::styled("week ", st(FA())), Span::styled(d1, st(CY())), Span::styled(d2, st(FA())), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG()))],
         ];
@@ -1421,6 +1421,21 @@ impl V for V1 {
             4 => rows[1][1].push(Ch::S(cwd)),
             5 => rows[1][2].push(Ch::S(cwd)),
             _ => {}
+        }
+        let mut mid: Vec<Span<'static>> = vec![];
+        if let (true, Some(n)) = (free::enabled(), a.frv) {
+            mid.extend([Span::styled("free ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]);
+        }
+        if let (true, Some(n)) = (free::claude_enabled(), a.clv) {
+            if !mid.is_empty() {
+                mid.push(pad(3));
+            }
+            mid.extend([Span::styled("claude ", st(FA())), Span::styled(free::short(n), st(FG())), Span::styled(" tok", st(FA()))]);
+        }
+        // the totals sit next to the effort label; with no effort side (or effort by the model) they stay centred
+        let by_eff = eff.is_some() && lay(1) < 4;
+        if !mid.is_empty() && !by_eff {
+            rows[1][1].push(Ch::S(mid.clone()));
         }
         let run: Vec<usize> = (0..4).map(|k| a.tasks.iter().filter(|t| t.st == 0 && t.kind == k as u8).count()).collect();
         if run.iter().sum::<usize>() > 0 {
@@ -1461,11 +1476,27 @@ impl V for V1 {
             _ => {}
         }
         if let Some(e) = eff {
+            let m = (!mid.is_empty() && by_eff).then(|| Ch::S(mid.clone()));
+            // on the right-hand side the totals sit 4 columns further left of the effort label
+            let mr = m.as_ref().map(|_| {
+                let mut v = mid.clone();
+                // "medium" is two letters longer than "high": one column less so the gap looks the same,
+                // and one more less while shells are listed, or the label gets cut off
+                let gap = if a.effs == "medium" { if run.iter().sum::<usize>() > 0 { 2 } else { 3 } } else { 4 };
+                v.push(pad(gap));
+                Ch::S(v)
+            });
             match lay(1) {
-                0 => rows[1][2].push(Ch::S(e)),
-                1 => rows[1][0].insert(0, Ch::S(e)),
-                2 => rows[0][2].push(Ch::S(e)),
-                3 => rows[0][0].insert(0, Ch::S(e)),
+                0 => rows[1][2].extend(mr.into_iter().chain([Ch::S(e)])),
+                1 => {
+                    rows[1][0].insert(0, Ch::S(e));
+                    rows[1][0].splice(1..1, m);
+                }
+                2 => rows[0][2].extend(mr.into_iter().chain([Ch::S(e)])),
+                3 => {
+                    rows[0][0].insert(0, Ch::S(e));
+                    rows[0][0].splice(1..1, m);
+                }
                 _ => {}
             }
         }

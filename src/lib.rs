@@ -1,4 +1,5 @@
 pub mod bg;
+pub mod free;
 pub mod img;
 pub mod sys;
 pub mod upd;
@@ -371,6 +372,14 @@ pub struct App {
     pub upr: Option<std::sync::mpsc::Receiver<upd::Up>>,
     pub ups: String,
     pub upf: bool,
+    /// Pending read of the free-token total, the last total, and when it was asked.
+    pub frr: Option<std::sync::mpsc::Receiver<Option<u64>>>,
+    pub frv: Option<u64>,
+    frat: Option<Instant>,
+    /// The same three for the Claude token total.
+    pub clr: Option<std::sync::mpsc::Receiver<Option<u64>>>,
+    pub clv: Option<u64>,
+    clat: Option<Instant>,
     le: u64,
     pub imgs: Vec<(&'static str, Vec<u8>)>,
     pub pst: Vec<String>,
@@ -633,6 +642,12 @@ impl App {
             upr: None,
             ups: String::new(),
             upf: false,
+            frr: None,
+            frv: None,
+            frat: None,
+            clr: None,
+            clv: None,
+            clat: None,
             le: 0,
             imgs: vec![],
             pst: vec![],
@@ -704,6 +719,8 @@ impl App {
                 self.tpoll(s);
             }
         }
+        self.frpoll();
+        self.clpoll();
         if let Some(r) = &self.upr {
             if let Ok(u) = r.try_recv() {
                 self.upr = None;
@@ -1009,6 +1026,50 @@ impl App {
         self.lqa(q, ok);
     }
 
+    /// Keeps the free-token total fresh while the option is on; one background read at a time.
+    fn frpoll(&mut self) {
+        if let Some(r) = &self.frr {
+            if let Ok(v) = r.try_recv() {
+                self.frr = None;
+                if v.is_some() {
+                    self.frv = v;
+                }
+            }
+            return;
+        }
+        if !free::enabled() {
+            self.frv = None;
+            self.frat = None;
+            return;
+        }
+        if self.frat.is_none_or(|t| t.elapsed() >= free::EVERY) {
+            self.frat = Some(Instant::now());
+            self.frr = Some(free::fetch());
+        }
+    }
+
+    /// Same for the Claude token total, read once a minute while its option is on.
+    fn clpoll(&mut self) {
+        if let Some(r) = &self.clr {
+            if let Ok(v) = r.try_recv() {
+                self.clr = None;
+                if v.is_some() {
+                    self.clv = v;
+                }
+            }
+            return;
+        }
+        if !free::claude_enabled() {
+            self.clv = None;
+            self.clat = None;
+            return;
+        }
+        if self.clat.is_none_or(|t| t.elapsed() >= free::CLAUDE_EVERY) {
+            self.clat = Some(Instant::now());
+            self.clr = Some(free::fetch_claude());
+        }
+    }
+
     pub fn upcheck(&mut self, force: bool) {
         if self.upr.is_some() {
             return;
@@ -1039,6 +1100,8 @@ impl App {
             ("location", LAYOUT[5].1[lay(5)].into()),
             ("right-click paste", if rclick() { "on" } else { "off" }.into()),
             ("opacity", format!("{}%", opac())),
+            ("free tokens", if free::enabled() { "on, middle of the footer" } else { "off" }.into()),
+            ("claude tokens", if free::claude_enabled() { "on, after the free total" } else { "off" }.into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -2024,6 +2087,18 @@ impl App {
                         self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
                     }
                     15 => self.setopac(true),
+                    16 => {
+                        let on = !free::enabled();
+                        free::set_enabled(on);
+                        self.frat = None;
+                        self.toast(format!("free tokens  {}", if on { "on" } else { "off" }));
+                    }
+                    17 => {
+                        let on = !free::claude_enabled();
+                        free::set_claude_enabled(on);
+                        self.clat = None;
+                        self.toast(format!("claude tokens  {}", if on { "on" } else { "off" }));
+                    }
                     _ => self.upcheck(true),
                 },
                 _ => {}
