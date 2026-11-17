@@ -1,3 +1,4 @@
+#![deny(clippy::mem_forget)]
 use noname::pal::*;
 use noname::*;
 use ratatui::prelude::*;
