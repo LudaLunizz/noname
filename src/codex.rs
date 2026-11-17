@@ -10,8 +10,8 @@ use super::*;
 
 pub struct Cx {
     pub(crate) tid: Option<String>,
-    ch: Option<Child>,
-    rx: Option<Receiver<Value>>,
+    pub(crate) ch: Option<Child>,
+    pub(crate) rx: Option<Receiver<Value>>,
     pub(crate) args: Vec<String>,
     pub(crate) im: HashMap<String, usize>,
     pub(crate) last: bool,
@@ -244,6 +244,8 @@ impl App {
                 self.toast("next message resumes that session");
             }
             "quit" | "exit" => self.quit = true,
+            // opencode knows its own commands and skills (/researcher, /deep-research, ...): let it run them
+            _ if self.is_opencode() && crate::opencode::split_cmd(&format!("/{r}")).is_some() => self.csubmit(format!("/{r}")),
             _ => self.toast(format!("/{c} is not available with {}", self.eng())),
         }
     }

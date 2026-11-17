@@ -52,6 +52,8 @@ noname --codex      # use Codex as the engine
 noname --opencode   # use opencode as the engine (one `opencode run` per message)
 ```
 
+With `--opencode`, a slash command that is not one of noname's own (`/researcher`, `/deep-research`, your own commands and skills) runs as `opencode run --command NAME ARGS`. Commands that need a shell still need a permission: `opencode run` cannot ask, so allow them in opencode's config or pick the auto or bypass mode.
+
 Other flags go straight to `claude`.
 
 | key | | command | |
