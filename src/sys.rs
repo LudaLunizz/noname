@@ -69,6 +69,8 @@ pub fn which(b: &str) -> Option<PathBuf> {
 #[cfg(unix)]
 pub fn guard(c: &mut Command) -> &mut Command {
     use std::os::unix::process::CommandExt;
+    // SAFETY: the closure runs in the forked child before exec, so it may only call
+    // async-signal-safe functions. prctl is a plain syscall and takes no locks or memory.
     unsafe {
         c.pre_exec(|| {
             #[cfg(target_os = "linux")]
@@ -93,6 +95,8 @@ pub fn adopt(c: &Child) {
     use std::os::windows::io::AsRawHandle;
     let j = job();
     if j != 0 {
+        // SAFETY: `j` is a valid job handle kept for the whole process (see `job`) and the
+        // child handle is valid while `c` is borrowed; a failed call only leaves the child out of the job.
         unsafe {
             win::AssignProcessToJobObject(j as _, c.as_raw_handle() as _);
         }
@@ -101,6 +105,8 @@ pub fn adopt(c: &Child) {
 
 #[cfg(unix)]
 pub fn term(id: i32) {
+    // SAFETY: kill(2) has no memory-safety preconditions. A negative pid signals a whole
+    // process group; callers pass the pid of a child they spawned (from `Child::id`), never 0 or 1.
     unsafe {
         libc::kill(-id, libc::SIGTERM);
         libc::kill(id, libc::SIGTERM);
@@ -109,6 +115,7 @@ pub fn term(id: i32) {
 
 #[cfg(unix)]
 pub fn kill(id: i32) {
+    // SAFETY: same as `term`: kill(2) only sends a signal.
     unsafe {
         libc::kill(-id, libc::SIGKILL);
         libc::kill(id, libc::SIGKILL);
@@ -134,6 +141,8 @@ pub fn kill(id: i32) {
 
 pub fn exit_now() -> ! {
     #[cfg(unix)]
+    // SAFETY: _exit ends the process at once without running destructors or atexit handlers,
+    // which is the point: it is also called from signal-handling threads.
     unsafe {
         libc::_exit(0)
     }
@@ -166,6 +175,8 @@ pub fn on_close(f: fn()) {
 pub fn on_close(f: fn()) {
     let _ = job();
     let _ = HANDLER.set(f);
+    // SAFETY (callers): Windows calls this with a control-event code on its own thread; it only
+    // touches atomics, a OnceLock and `exit_now`, so it has no preconditions of its own.
     unsafe extern "system" fn h(ty: u32) -> i32 {
         // Ctrl+C does not close noname at once: the main loop picks it up through ctrlc()
         // and handles it like the key (first press interrupts, second press exits).
@@ -178,6 +189,7 @@ pub fn on_close(f: fn()) {
         }
         exit_now()
     }
+    // SAFETY: `h` is a plain function that lives for the whole process, so the pointer stays valid.
     unsafe {
         win::SetConsoleCtrlHandler(Some(h), 1);
     }
@@ -213,6 +225,8 @@ pub fn ctrlc() -> bool {
 #[cfg(windows)]
 fn job() -> isize {
     static J: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
+    // SAFETY: both calls get a zeroed, correctly sized struct and a handle checked for null; the
+    // handle is never closed, so it lives as long as the process (that is what kills the children).
     *J.get_or_init(|| unsafe {
         let j = win::CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if j.is_null() {
@@ -294,6 +308,8 @@ pub fn open_url(url: &str) {
 
 pub fn month() -> i32 {
     #[cfg(unix)]
+    // SAFETY: `t` and `tm` are valid for the call; an all-zero libc::tm is a valid value, and
+    // localtime_r (unlike localtime) writes only into the buffer we pass.
     unsafe {
         let t = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
@@ -301,6 +317,7 @@ pub fn month() -> i32 {
         tm.tm_mon
     }
     #[cfg(windows)]
+    // SAFETY: `st` is a valid, zeroed SYSTEMTIME that GetLocalTime fills in.
     unsafe {
         let mut st: windows_sys::Win32::Foundation::SYSTEMTIME = std::mem::zeroed();
         windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut st);
