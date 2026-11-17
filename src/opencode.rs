@@ -206,6 +206,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::Eng;
 
     #[test]
     fn splits_slash_commands() {
@@ -220,7 +221,7 @@ mod tests {
 
     #[test]
     fn command_runs_with_dash_dash_command() {
-        let c = Cx { tid: None, ch: None, rx: None, args: vec![], im: Default::default(), last: false, t0: 0, oc: true, tok: 0 };
+        let c = Cx { tid: None, ch: None, rx: None, args: vec![], im: Default::default(), last: false, t0: 0, eng: Eng::Opencode, tok: 0, err: String::new(), fin: false };
         let a = |x: &str| build(&c, 0, &[], 0, x).get_args().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>();
         let v = a("/researcher rust");
         assert!(v.windows(2).any(|w| w == ["--command", "researcher"]));

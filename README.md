@@ -29,7 +29,7 @@ noname is a terminal UI (TUI) for [Claude Code](https://claude.com/claude-code),
 - live context and limit bars, cost under every answer
 - themes (default, dracula, tokyo-night, catppuccin mocha, or your own), animated backgrounds, self updates
 - image paste, `@` file mentions, background shells and subagents, `/diff`, `/mcp`, `/resume`
-- Linux, macOS and Windows; optional Codex engine with `--codex` and opencode engine with `--opencode`
+- Linux, macOS and Windows; optional Codex engine with `--codex`, opencode engine with `--opencode` and Antigravity engine with `--agy`
 
 ## Install
 
@@ -50,9 +50,35 @@ noname -c           # continue the latest session
 noname -r <id>      # resume a session
 noname --codex      # use Codex as the engine
 noname --opencode   # use opencode as the engine (one `opencode run` per message)
+noname --agy        # use the Antigravity CLI as the engine (one `agy -p` per message)
 ```
 
 With `--opencode`, a slash command that is not one of noname's own (`/researcher`, `/deep-research`, your own commands and skills) runs as `opencode run --command NAME ARGS`. Commands that need a shell still need a permission: `opencode run` cannot ask, so allow them in opencode's config or pick the auto or bypass mode.
+
+### Antigravity (`--agy`)
+
+Standard setup for Google's Antigravity CLI (`agy`):
+
+1. Install `agy` and run it **once** by hand to sign in. noname runs `agy -p` without a terminal, so it only works with the cached sign-in; without it the run ends with `authentication required`, shown in the chat.
+2. Start `noname --agy` in your project folder. Add `-c` or `--conversation ID` to resume, and `--model NAME`, `--effort low|medium|high|xhigh|max` or `--agent NAME` as you would on `agy` (`agy models` and `agy agents` list them). `--antigravity` and `NONAME_ENGINE=agy` do the same as `--agy`.
+3. Pick the mode with Shift+Tab or `/noname`:
+
+| noname mode | `agy` flag |
+|---|---|
+| default | none: shell commands are asked |
+| plan | `--mode plan` |
+| auto | `--mode accept-edits` |
+| bypass | `--dangerously-skip-permissions` |
+
+`agy -p` cannot ask for permission. In default mode a command that needs approval is skipped, the run still ends well, and noname shows the note from `agy` under the answer. Allow what you trust once in `~/.gemini/antigravity-cli/settings.json` (replace the examples with your own commands) so default mode works without bypass:
+
+```json
+{ "permissions": { "allow": ["command(git)", "command(regex:npm run (build|lint|test))", "write_file(src/)"] } }
+```
+
+Slash commands and skills (`/researcher`, your own) go to `agy` as the prompt, which expands them itself. `agy` menu commands such as `/model`, `/usage` and `/permissions` are not available; use the startup flags. An image you paste is saved as a file and its path is added to the prompt, because print mode takes text only. The footer shows no usage bars: `agy` reports tokens per answer, not limits.
+
+To report a problem, start with `NONAME_ENGINE_LOG=/tmp/agy-events.log noname --agy`: every raw event line from `agy` is appended to that file (works for `--codex` and `--opencode` too). Attach it, and the output of `agy --version`.
 
 Other flags go straight to `claude`.
 
