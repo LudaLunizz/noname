@@ -3836,9 +3836,9 @@ fn dump<T: V + Clone>(v0: &mut T, args: &[String]) -> io::Result<()> {
             let mut vv = v0.clone();
             let v = &mut vv;
             setup(v, &mut a, s);
-            let mut term = Terminal::new(TestBackend::new(w, h))?;
+            let mut term = Terminal::new(TestBackend::new(w, h)).expect("the test backend cannot fail");
             a.cp.set(None);
-            term.draw(|f| v.draw(f, &a))?;
+            term.draw(|f| v.draw(f, &a)).expect("the test backend cannot fail");
             let b = term.backend().buffer().clone();
             let mut txt = String::new();
             for y in 0..h {
