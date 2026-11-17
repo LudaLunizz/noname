@@ -184,10 +184,15 @@ impl Bg {
     fn ext(name: &'static str, rows: u16, cols: u16) -> io::Result<Bg> {
         let (mut m, mut s) = (0, 0);
         let w = ws(rows, cols);
+        // SAFETY: `m` and `s` are valid for writes, the name and termios arguments may be null, and
+        // `w` is a winsize that lives for the call (the cast to *mut is only the C signature).
         if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) } != 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: openpty succeeded, so `m` and `s` are open descriptors that nothing else owns;
+        // each OwnedFd takes over exactly one of them and closes it once.
         let m = unsafe { OwnedFd::from_raw_fd(m) };
+        // SAFETY: as above.
         let s = unsafe { OwnedFd::from_raw_fd(s) };
         let av = argv(name);
         let mut c = Command::new(which(av[0]).map(|p| p.into_os_string()).unwrap_or_else(|| av[0].into()));
@@ -198,6 +203,8 @@ impl Bg {
             .stdin(Stdio::from(s.try_clone()?))
             .stdout(Stdio::from(s.try_clone()?))
             .stderr(Stdio::from(s.try_clone()?));
+        // SAFETY: the closure runs in the forked child before exec, so it may only call
+        // async-signal-safe functions: setsid, ioctl and prctl are all plain syscalls.
         unsafe {
             c.pre_exec(|| {
                 libc::setsid();
@@ -234,6 +241,8 @@ impl Bg {
         }
         p.sz = (r, c);
         #[cfg(unix)]
+        // SAFETY: the master descriptor is open while `p` is borrowed, and `w` is a winsize that
+        // lives for the call; a failed ioctl only leaves the old size in place.
         unsafe {
             let w = ws(r, c);
             libc::ioctl(p.m.as_raw_fd(), libc::TIOCSWINSZ as _, &w);
