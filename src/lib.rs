@@ -1,3 +1,4 @@
+#![deny(clippy::mem_forget)]
 pub mod bg;
 pub mod free;
 pub mod img;
