@@ -27,6 +27,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 
 [profile.release]
 opt-level = 3
+overflow-checks = true
 lto = "thin"
 codegen-units = 1
 strip = true
