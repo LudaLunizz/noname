@@ -24,6 +24,14 @@ pub fn cfg_model() -> String {
     "opencode".into()
 }
 
+/// `/name args` -> (`name`, `args`), for running an opencode command or skill with `--command`.
+pub fn split_cmd(x: &str) -> Option<(&str, &str)> {
+    let r = x.strip_prefix('/')?;
+    let (n, a) = r.split_once(char::is_whitespace).unwrap_or((r, ""));
+    let ok = !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'));
+    ok.then(|| (n, a.trim()))
+}
+
 /// One `opencode run` per message, like the Codex engine runs one `codex exec`.
 pub fn build(c: &Cx, mode: usize, imgs: &[(&'static str, Vec<u8>)], t: u64, x: &str) -> Command {
     let mut cmd = Command::new(crate::sys::bin("opencode"));
@@ -44,8 +52,18 @@ pub fn build(c: &Cx, mode: usize, imgs: &[(&'static str, Vec<u8>)], t: u64, x: &
         cmd.arg("-c");
     }
     cmd.args(&c.args);
+    // a slash command or skill runs with --command, and the rest of the line is its $ARGUMENTS
+    let (x, name) = match split_cmd(x) {
+        Some((n, a)) => (a, Some(n)),
+        None => (x, None),
+    };
+    if let Some(n) = name {
+        cmd.args(["--command", n]);
+    }
     // the message goes before -f, because -f takes a list and would swallow it
-    cmd.arg(x);
+    if !x.is_empty() {
+        cmd.arg(x);
+    }
     for (k, (m, b)) in imgs.iter().enumerate() {
         let f = std::env::temp_dir().join(format!("noname-{}-{t}-{k}.{}", std::process::id(), crate::img::ext(m)));
         if std::fs::write(&f, b).is_ok() {
@@ -182,5 +200,35 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_slash_commands() {
+        assert_eq!(split_cmd("/researcher rust"), Some(("researcher", "rust")));
+        assert_eq!(split_cmd("/deep-research   best way to X?  "), Some(("deep-research", "best way to X?")));
+        assert_eq!(split_cmd("/researcher"), Some(("researcher", "")));
+        assert_eq!(split_cmd("/ps:run\nmore"), Some(("ps:run", "more")));
+        assert_eq!(split_cmd("/etc/hosts"), None);
+        assert_eq!(split_cmd("/"), None);
+        assert_eq!(split_cmd("hello /x"), None);
+    }
+
+    #[test]
+    fn command_runs_with_dash_dash_command() {
+        let c = Cx { tid: None, ch: None, rx: None, args: vec![], im: Default::default(), last: false, t0: 0, oc: true, tok: 0 };
+        let a = |x: &str| build(&c, 0, &[], 0, x).get_args().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>();
+        let v = a("/researcher rust");
+        assert!(v.windows(2).any(|w| w == ["--command", "researcher"]));
+        assert_eq!(v.last().map(String::as_str), Some("rust"));
+        let v = a("/researcher");
+        assert!(v.contains(&"--command".to_string()) && !v.contains(&"rust".to_string()));
+        let v = a("plain words");
+        assert!(!v.contains(&"--command".to_string()));
+        assert_eq!(v.last().map(String::as_str), Some("plain words"));
     }
 }
