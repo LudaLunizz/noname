@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "noname"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "libc",
  "ratatui",
