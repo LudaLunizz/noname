@@ -1,3 +1,6 @@
+//! Background shells: runs a long command in a pseudo-terminal (Unix) or job object (Windows)
+//! and exposes its screen to the UI through a `vt100` parser.
+
 #[cfg(unix)]
 use std::fs::File;
 use std::io;
@@ -47,7 +50,22 @@ const NAMES: &[(&str, &str)] = &[
 ];
 
 pub const NATIVE: [&str; 4] = ["stars", "matrix", "rain", "snow"];
-pub const PICK: [&str; 14] = ["stars", "matrix", "rain", "snow", "cava", "lavat", "pipes.sh", "asciiquarium", "cbonsai", "unimatrix", "neo-matrix", "tty-clock", "weathr", "globe"];
+pub const PICK: [&str; 14] = [
+    "stars",
+    "matrix",
+    "rain",
+    "snow",
+    "cava",
+    "lavat",
+    "pipes.sh",
+    "asciiquarium",
+    "cbonsai",
+    "unimatrix",
+    "neo-matrix",
+    "tty-clock",
+    "weathr",
+    "globe",
+];
 
 pub fn avail() -> Vec<&'static str> {
     let mut v = vec!["off"];
@@ -91,8 +109,21 @@ pub fn hint(k: &str) -> String {
         return "cargo install weathr".into();
     }
     if has("pacman") && !ar.is_empty() {
-        let aur = matches!(ar, "lavat" | "pipes.sh" | "unimatrix" | "neo-matrix" | "weathr-bin" | "cbonsai");
-        let h = if aur { if has("paru") { "paru" } else if has("yay") { "yay" } else { "an AUR helper:" } } else { "sudo pacman" };
+        let aur = matches!(
+            ar,
+            "lavat" | "pipes.sh" | "unimatrix" | "neo-matrix" | "weathr-bin" | "cbonsai"
+        );
+        let h = if aur {
+            if has("paru") {
+                "paru"
+            } else if has("yay") {
+                "yay"
+            } else {
+                "an AUR helper:"
+            }
+        } else {
+            "sudo pacman"
+        };
         return format!("{h} -S {ar}");
     }
     if has("apt") && !de.is_empty() {
@@ -127,7 +158,13 @@ fn argv(k: &'static str) -> Vec<&'static str> {
     match k {
         "cbonsai" => vec!["cbonsai", "-S"],
         "tty-clock" => vec!["tty-clock", "-c", "-s"],
-        "weathr" => vec!["weathr", "--auto-location", "--hide-location", "--hide-hud", "--silent"],
+        "weathr" => vec![
+            "weathr",
+            "--auto-location",
+            "--hide-location",
+            "--hide-hud",
+            "--silent",
+        ],
         "globe" => vec!["globe", "-s", "-c", "1"],
         "neo-matrix" => vec!["neo-matrix", "-D", "--charset=ascii"],
         k => vec![k],
@@ -163,18 +200,34 @@ pub struct Bg {
 
 #[cfg(unix)]
 fn ws(r: u16, c: u16) -> libc::winsize {
-    libc::winsize { ws_row: r, ws_col: c, ws_xpixel: 0, ws_ypixel: 0 }
+    libc::winsize {
+        ws_row: r,
+        ws_col: c,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    }
 }
 
 impl Bg {
     pub fn new(name: &'static str, rows: u16, cols: u16) -> io::Result<Bg> {
         if NATIVE.contains(&name) {
-            return Ok(Bg { name, pr: None, ds: vec![], sz: (0, 0), lt: 0, fl: None, sn: Default::default() });
+            return Ok(Bg {
+                name,
+                pr: None,
+                ds: vec![],
+                sz: (0, 0),
+                lt: 0,
+                fl: None,
+                sn: Default::default(),
+            });
         }
         #[cfg(windows)]
         {
             let _ = (rows, cols);
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "external backgrounds need a unix pty"));
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "external backgrounds need a unix pty",
+            ))
         }
         #[cfg(unix)]
         Self::ext(name, rows, cols)
@@ -186,7 +239,16 @@ impl Bg {
         let w = ws(rows, cols);
         // SAFETY: `m` and `s` are valid for writes, the name and termios arguments may be null, and
         // `w` is a winsize that lives for the call (the cast to *mut is only the C signature).
-        if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) } != 0 {
+        if unsafe {
+            libc::openpty(
+                &mut m,
+                &mut s,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &w as *const _ as *mut _,
+            )
+        } != 0
+        {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: openpty succeeded, so `m` and `s` are open descriptors that nothing else owns;
@@ -195,7 +257,11 @@ impl Bg {
         // SAFETY: as above.
         let s = unsafe { OwnedFd::from_raw_fd(s) };
         let av = argv(name);
-        let mut c = Command::new(which(av[0]).map(|p| p.into_os_string()).unwrap_or_else(|| av[0].into()));
+        let mut c = Command::new(
+            which(av[0])
+                .map(|p| p.into_os_string())
+                .unwrap_or_else(|| av[0].into()),
+        );
         c.args(&av[1..])
             .env("TERM", "xterm-256color")
             .env("COLUMNS", cols.to_string())
@@ -231,7 +297,20 @@ impl Bg {
                 }
             }
         });
-        Ok(Bg { name, pr: Some(Pr { ch, m, ps, sz: (rows, cols) }), ds: vec![], sz: (0, 0), lt: 0, fl: None, sn: Default::default() })
+        Ok(Bg {
+            name,
+            pr: Some(Pr {
+                ch,
+                m,
+                ps,
+                sz: (rows, cols),
+            }),
+            ds: vec![],
+            sz: (0, 0),
+            lt: 0,
+            fl: None,
+            sn: Default::default(),
+        })
     }
 
     fn resize(&mut self, r: u16, c: u16) {
@@ -255,15 +334,26 @@ impl Bg {
     pub fn paint(&mut self, b: &mut Buffer, t: u64) {
         let a = b.area;
         self.resize(a.height, a.width);
-        let occ: Vec<bool> = (0..a.height).flat_map(|y| (0..a.width).map(move |x| (x, y))).map(|(x, y)| b[(x, y)].symbol() != " " || b[(x, y)].bg != Color::Reset).collect();
-        let at = |x: i32, y: u16| x >= 0 && (x as u16) < a.width && occ[y as usize * a.width as usize + x as usize];
-        let free = |_: &Buffer, x: u16, y: u16| -> bool { !at(x as i32, y) && !at(x as i32 - 1, y) && !at(x as i32 + 1, y) };
+        let occ: Vec<bool> = (0..a.height)
+            .flat_map(|y| (0..a.width).map(move |x| (x, y)))
+            .map(|(x, y)| b[(x, y)].symbol() != " " || b[(x, y)].bg != Color::Reset)
+            .collect();
+        let at = |x: i32, y: u16| {
+            x >= 0 && (x as u16) < a.width && occ[y as usize * a.width as usize + x as usize]
+        };
+        let free = |_: &Buffer, x: u16, y: u16| -> bool {
+            !at(x as i32, y) && !at(x as i32 - 1, y) && !at(x as i32 + 1, y)
+        };
         if self.name == "snow" {
             self.snow(b, t, &occ);
             return;
         }
         if self.name == "matrix" || self.name == "rain" {
-            let dt = if self.lt == 0 { 1.0 } else { (t.saturating_sub(self.lt)).min(10) as f32 };
+            let dt = if self.lt == 0 {
+                1.0
+            } else {
+                (t.saturating_sub(self.lt)).min(10) as f32
+            };
             self.lt = t;
             if self.sz != (a.width, a.height) {
                 self.sz = (a.width, a.height);
@@ -279,20 +369,35 @@ impl Bg {
                 if !free(b, x as u16, y as u16) {
                     return;
                 }
-                b[(x as u16, y as u16)].set_symbol(ch).set_style(Style::new().fg(c));
+                b[(x as u16, y as u16)]
+                    .set_symbol(ch)
+                    .set_style(Style::new().fg(c));
             };
             if self.name == "matrix" {
                 let want = (w as usize * 2 / 5).max(4);
                 while self.ds.len() < want {
                     let k = hsh(t, self.ds.len() as u64 * 977 + 13);
-                    self.ds.push(Dr { x: (k % w as u64) as u16, y: -(((k >> 8) % h as u64) as f32), v: 0.25 + ((k >> 16) % 100) as f32 / 160.0, n: 6 + ((k >> 24) % 18) as u16, s: k });
+                    self.ds.push(Dr {
+                        x: (k % w as u64) as u16,
+                        y: -(((k >> 8) % h as u64) as f32),
+                        v: 0.25 + ((k >> 16) % 100) as f32 / 160.0,
+                        n: 6 + ((k >> 24) % 18) as u16,
+                        s: k,
+                    });
                 }
-                const CS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$%#@&*+=<>";
+                const CS: &[u8] =
+                    b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$%#@&*+=<>";
                 for d in self.ds.iter_mut() {
                     d.y += d.v * dt;
                     if d.y - d.n as f32 > h as f32 {
                         let k = hsh(d.s, t);
-                        *d = Dr { x: (k % w as u64) as u16, y: -(((k >> 8) % 8) as f32), v: 0.25 + ((k >> 16) % 100) as f32 / 160.0, n: 6 + ((k >> 24) % 18) as u16, s: k };
+                        *d = Dr {
+                            x: (k % w as u64) as u16,
+                            y: -(((k >> 8) % 8) as f32),
+                            v: 0.25 + ((k >> 16) % 100) as f32 / 160.0,
+                            n: 6 + ((k >> 24) % 18) as u16,
+                            s: k,
+                        };
                     }
                 }
                 for d in &self.ds {
@@ -300,9 +405,19 @@ impl Bg {
                     for j in 0..d.n as i32 {
                         let y = hy - j;
                         let f = j as f32 / d.n as f32;
-                        let ci = (hsh(d.s ^ y as u64, if j == 0 { t / 4 } else { t / 24 + y as u64 % 7 }) % CS.len() as u64) as usize;
+                        let ci = (hsh(
+                            d.s ^ y as u64,
+                            if j == 0 { t / 4 } else { t / 24 + y as u64 % 7 },
+                        ) % CS.len() as u64) as usize;
                         let ch = (CS[ci] as char).to_string();
-                        let c = if j == 0 { grad(&[base, crate::pal::WH()], 0.42) } else { grad(&[grad(&[base, LI()], 0.34), grad(&[base, CY()], 0.18), base], (f * 6.0).ceil() / 6.0) };
+                        let c = if j == 0 {
+                            grad(&[base, crate::pal::WH()], 0.42)
+                        } else {
+                            grad(
+                                &[grad(&[base, LI()], 0.34), grad(&[base, CY()], 0.18), base],
+                                (f * 6.0).ceil() / 6.0,
+                            )
+                        };
                         put(b, d.x as i32, y, &ch, c);
                     }
                 }
@@ -310,13 +425,25 @@ impl Bg {
                 let want = (w as usize * h as usize / 70).max(8);
                 while self.ds.len() < want {
                     let k = hsh(t ^ 0xabc, self.ds.len() as u64 * 131 + 7);
-                    self.ds.push(Dr { x: (k % (w as u64 + 20)) as u16, y: -(((k >> 8) % h as u64) as f32), v: 0.7 + ((k >> 16) % 100) as f32 / 120.0, n: 1 + ((k >> 24) % 3) as u16, s: k });
+                    self.ds.push(Dr {
+                        x: (k % (w as u64 + 20)) as u16,
+                        y: -(((k >> 8) % h as u64) as f32),
+                        v: 0.7 + ((k >> 16) % 100) as f32 / 120.0,
+                        n: 1 + ((k >> 24) % 3) as u16,
+                        s: k,
+                    });
                 }
                 for d in self.ds.iter_mut() {
                     d.y += d.v * dt;
                     if d.y > h as f32 + 1.0 {
                         let k = hsh(d.s, t);
-                        *d = Dr { x: (k % (w as u64 + 20)) as u16, y: -(((k >> 8) % 6) as f32), v: 0.7 + ((k >> 16) % 100) as f32 / 120.0, n: 1 + ((k >> 24) % 3) as u16, s: k };
+                        *d = Dr {
+                            x: (k % (w as u64 + 20)) as u16,
+                            y: -(((k >> 8) % 6) as f32),
+                            v: 0.7 + ((k >> 16) % 100) as f32 / 120.0,
+                            n: 1 + ((k >> 24) % 3) as u16,
+                            s: k,
+                        };
                     }
                 }
                 for d in &self.ds {
@@ -324,7 +451,13 @@ impl Bg {
                     let x = d.x as i32 - (d.y * 0.35) as i32;
                     let c = grad(&[base, CY()], 0.16 + (d.s % 10) as f32 * 0.012);
                     for j in 0..d.n as i32 {
-                        put(b, x + j / 3, y - j, if j == 0 { "/" } else { "'" }, grad(&[c, base], j as f32 / (d.n as f32 + 1.0)));
+                        put(
+                            b,
+                            x + j / 3,
+                            y - j,
+                            if j == 0 { "/" } else { "'" },
+                            grad(&[c, base], j as f32 / (d.n as f32 + 1.0)),
+                        );
                     }
                     if y >= h as i32 - 1 {
                         put(b, x - 1, h as i32 - 1, ".", grad(&[base, CY()], 0.12));
@@ -347,11 +480,21 @@ impl Bg {
                     if el > 9 {
                         self.fl = None;
                     } else {
-                        let k = if el < 2 || (4..6).contains(&el) { 0.55 } else { 0.2 };
+                        let k = if el < 2 || (4..6).contains(&el) {
+                            0.55
+                        } else {
+                            0.2
+                        };
                         let c = grad(&[base, crate::pal::WH()], k);
                         for (i, &(x, y)) in v.iter().enumerate() {
                             let p = if i > 0 { v[i - 1].0 } else { x };
-                            let ch = if x > p { "\\" } else if x < p { "/" } else { "|" };
+                            let ch = if x > p {
+                                "\\"
+                            } else if x < p {
+                                "/"
+                            } else {
+                                "|"
+                            };
                             put(b, x as i32, y as i32, ch, c);
                         }
                     }
@@ -370,7 +513,13 @@ impl Bg {
                         }
                         let tw = (pulse(t + h % 200, 80.0 + (h % 60) as f32) * 6.0).round() / 6.0;
                         let ch = ["·", ".", "+", "*"][(h / 61 % 4) as usize];
-                        let c = grad(&[grad(&[FA(), BASE()], 0.85), if h % 3 == 0 { CY() } else { LI() }], 0.15 + tw * 0.35);
+                        let c = grad(
+                            &[
+                                grad(&[FA(), BASE()], 0.85),
+                                if h % 3 == 0 { CY() } else { LI() },
+                            ],
+                            0.15 + tw * 0.35,
+                        );
                         b[(x, y)].set_symbol(ch).set_style(Style::new().fg(c));
                     }
                 }
@@ -399,7 +548,9 @@ impl Bg {
                         if !free(b, x, y) {
                             continue;
                         }
-                        b[(x, y)].set_symbol(&s).set_style(Style::new().fg(dim(vc(col), 0.12)));
+                        b[(x, y)]
+                            .set_symbol(&s)
+                            .set_style(Style::new().fg(dim(vc(col), 0.12)));
                     }
                 }
             }
@@ -415,7 +566,11 @@ impl Bg {
     fn snow(&mut self, b: &mut Buffer, t: u64, occ: &[bool]) {
         let a = b.area;
         let (w, h) = (a.width, a.height);
-        let dt = if self.lt == 0 { 1.0 } else { (t.saturating_sub(self.lt)).min(10) as f32 };
+        let dt = if self.lt == 0 {
+            1.0
+        } else {
+            (t.saturating_sub(self.lt)).min(10) as f32
+        };
         self.lt = t;
         if self.sz != (w, h) {
             self.sz = (w, h);
@@ -423,7 +578,13 @@ impl Bg {
             self.sn.clear();
         }
         let base = BASE();
-        let oc = |x: i32, y: i32| x >= 0 && y >= 0 && x < w as i32 && y < h as i32 && occ[y as usize * w as usize + x as usize];
+        let oc = |x: i32, y: i32| {
+            x >= 0
+                && y >= 0
+                && x < w as i32
+                && y < h as i32
+                && occ[y as usize * w as usize + x as usize]
+        };
         let sn = &mut self.sn;
         let mut fall: Vec<(u16, u16)> = vec![];
         sn.retain(|&(x, y), _| {
@@ -435,18 +596,31 @@ impl Bg {
         });
         for (x, y) in fall {
             let k = hsh(t, x as u64 * 31 + y as u64);
-            self.ds.push(Dr { x, y: y as f32, v: 0.18 + (k % 40) as f32 / 200.0, n: 0, s: k });
+            self.ds.push(Dr {
+                x,
+                y: y as f32,
+                v: 0.18 + (k % 40) as f32 / 200.0,
+                n: 0,
+                s: k,
+            });
         }
         let want = (w as usize * h as usize / 110).max(10);
         while self.ds.len() < want {
             let k = hsh(t ^ 0x5eed, self.ds.len() as u64 * 7919 + 3);
-            self.ds.push(Dr { x: (k % w as u64) as u16, y: -(((k >> 8) % h as u64) as f32), v: 0.08 + ((k >> 16) % 100) as f32 / 900.0, n: 0, s: k });
+            self.ds.push(Dr {
+                x: (k % w as u64) as u16,
+                y: -(((k >> 8) % h as u64) as f32),
+                v: 0.08 + ((k >> 16) % 100) as f32 / 900.0,
+                n: 0,
+                s: k,
+            });
         }
         let mut keep = vec![];
         for mut d in std::mem::take(&mut self.ds) {
             let ny = d.y + d.v * dt;
             let drift = ((t as f32 * 0.03 + (d.s % 100) as f32).sin() * 0.6).round() as i32;
-            let x = (d.x as i32 + if hsh(d.s, t / 20) % 9 == 0 { drift } else { 0 }).clamp(0, w as i32 - 1);
+            let x = (d.x as i32 + if hsh(d.s, t / 20) % 9 == 0 { drift } else { 0 })
+                .clamp(0, w as i32 - 1);
             d.x = x as u16;
             let (y0, y1) = (d.y.floor() as i32, ny.floor() as i32);
             let mut landed = false;
@@ -482,18 +656,29 @@ impl Bg {
             if y < 0 || y >= h as i32 || oc(x, y) || oc(x - 1, y) || oc(x + 1, y) {
                 continue;
             }
-            b[(x as u16, y as u16)].set_symbol(if d.s % 3 == 0 { "*" } else { "." }).set_style(Style::new().fg(fc));
+            b[(x as u16, y as u16)]
+                .set_symbol(if d.s % 3 == 0 { "*" } else { "." })
+                .set_style(Style::new().fg(fc));
         }
         let sc = grad(&[base, crate::pal::WH()], 0.62);
         for (&(x, y), &l) in self.sn.iter() {
             if oc(x as i32, y as i32) {
                 continue;
             }
-            b[(x, y)].set_symbol(["▁", "▂", "▃", "▄"][(l.max(1) - 1) as usize]).set_style(Style::new().fg(sc));
+            b[(x, y)]
+                .set_symbol(["▁", "▂", "▃", "▄"][(l.max(1) - 1) as usize])
+                .set_style(Style::new().fg(sc));
         }
         if matches!(month(), 10 | 11) && h > 2 {
             let y = 1u16;
-            let cs = [crate::pal::RD(), crate::pal::GR(), CY(), crate::pal::PK(), LI(), crate::pal::WH()];
+            let cs = [
+                crate::pal::RD(),
+                crate::pal::GR(),
+                CY(),
+                crate::pal::PK(),
+                LI(),
+                crate::pal::WH(),
+            ];
             for x in 0..w {
                 if oc(x as i32, y as i32) {
                     continue;
@@ -502,9 +687,13 @@ impl Bg {
                 if x % 5 == 2 {
                     let c = cs[(k % cs.len() as u64) as usize];
                     let tw = pulse(t + hsh(k, 3) % 90, 45.0 + (hsh(k, 9) % 30) as f32);
-                    b[(x, y)].set_symbol("●").set_style(Style::new().fg(grad(&[base, c], 0.35 + tw * 0.55)));
+                    b[(x, y)]
+                        .set_symbol("●")
+                        .set_style(Style::new().fg(grad(&[base, c], 0.35 + tw * 0.55)));
                 } else {
-                    b[(x, y)].set_symbol("‿").set_style(Style::new().fg(grad(&[base, crate::pal::FA()], 0.45)));
+                    b[(x, y)]
+                        .set_symbol("‿")
+                        .set_style(Style::new().fg(grad(&[base, crate::pal::FA()], 0.45)));
                 }
             }
         }
@@ -550,7 +739,10 @@ const P16: [(u8, u8, u8); 16] = [
 
 fn safe(s: &str, k: u64) -> String {
     let c = s.chars().next().unwrap_or(' ');
-    if c.is_ascii() || ('\u{2500}'..='\u{259f}').contains(&c) || ('\u{2800}'..='\u{28ff}').contains(&c) {
+    if c.is_ascii()
+        || ('\u{2500}'..='\u{259f}').contains(&c)
+        || ('\u{2800}'..='\u{28ff}').contains(&c)
+    {
         return c.to_string();
     }
     let a = b"0123456789abcdefABCDEF$%#@&*+=";

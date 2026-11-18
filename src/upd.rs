@@ -1,3 +1,6 @@
+//! Self-update: checks the releases of the project, tells installs from a package manager apart
+//! from the ones noname manages itself, and downloads and swaps in the new binary.
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
@@ -24,14 +27,22 @@ pub enum Up {
 }
 
 pub fn managed() -> Option<&'static str> {
-    let p = std::env::current_exe().ok()?.to_string_lossy().replace('\\', "/").to_lowercase();
+    let p = std::env::current_exe()
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase();
     if p.contains("/cellar/") || p.contains("/homebrew/") || p.contains("/linuxbrew/") {
         Some("brew")
     } else if p.contains("/scoop/") {
         Some("scoop")
     } else if p.contains("/winget/") || p.contains("/windowsapps/") {
         Some("winget")
-    } else if p.starts_with("/usr/") || p.starts_with("/nix/") || p.starts_with("/opt/") || CHANNEL == "package" {
+    } else if p.starts_with("/usr/")
+        || p.starts_with("/nix/")
+        || p.starts_with("/opt/")
+        || CHANNEL == "package"
+    {
         Some("your package manager")
     } else {
         None
@@ -48,7 +59,10 @@ pub fn short() -> String {
 }
 
 pub fn enabled() -> bool {
-    std::env::var("NONAME_NO_UPDATE").is_err() && std::fs::read_to_string(sys::cfgfile("autoupdate")).map(|s| s.trim() != "off").unwrap_or(true)
+    std::env::var("NONAME_NO_UPDATE").is_err()
+        && std::fs::read_to_string(sys::cfgfile("autoupdate"))
+            .map(|s| s.trim() != "off")
+            .unwrap_or(true)
 }
 
 pub fn set_enabled(on: bool) {
@@ -60,11 +74,17 @@ pub fn set_enabled(on: bool) {
 }
 
 fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn due() -> bool {
-    let last = std::fs::read_to_string(sys::cfgfile("update-check")).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+    let last = std::fs::read_to_string(sys::cfgfile("update-check"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
     now().saturating_sub(last) >= EVERY
 }
 
@@ -78,7 +98,11 @@ fn cache() -> PathBuf {
 }
 
 fn quiet(c: &mut Command) -> &mut Command {
-    sys::guard(c).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0")
+    sys::guard(c)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
 }
 
 fn ok(c: &mut Command) -> bool {
@@ -94,7 +118,15 @@ fn ok(c: &mut Command) -> bool {
 }
 
 fn out(c: &mut Command) -> String {
-    sys::guard(c).stdin(Stdio::null()).stderr(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0").output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+    sys::guard(c)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 pub fn cleanup() {
@@ -132,7 +164,11 @@ fn run(force: bool) -> Up {
     }
     let _ = std::fs::write(&f, now().to_string());
     if c.join(".git").is_dir() {
-        if !ok(Command::new(&git).arg("-C").arg(&c).args(["fetch", "--quiet", "origin"])) {
+        if !ok(Command::new(&git)
+            .arg("-C")
+            .arg(&c)
+            .args(["fetch", "--quiet", "origin"]))
+        {
             return Up::Fail("could not reach github".into());
         }
     } else {
@@ -144,24 +180,47 @@ fn run(force: bool) -> Up {
             return Up::Fail("could not reach github".into());
         }
     }
-    let remote = out(Command::new(&git).arg("-C").arg(&c).args(["rev-parse", "origin/HEAD"]));
+    let remote = out(Command::new(&git)
+        .arg("-C")
+        .arg(&c)
+        .args(["rev-parse", "origin/HEAD"]));
     if remote.is_empty() {
         return Up::Fail("no remote head".into());
     }
     if remote == REV {
         return Up::Current;
     }
-    if !REV.is_empty() && !ok(Command::new(&git).arg("-C").arg(&c).args(["merge-base", "--is-ancestor", REV, &remote])) {
+    if !REV.is_empty()
+        && !ok(Command::new(&git).arg("-C").arg(&c).args([
+            "merge-base",
+            "--is-ancestor",
+            REV,
+            &remote,
+        ]))
+    {
         return Up::Skip("this build is newer than github".into());
     }
-    if !ok(Command::new(&git).arg("-C").arg(&c).args(["checkout", "--quiet", "--force", &remote])) {
+    if !ok(Command::new(&git)
+        .arg("-C")
+        .arg(&c)
+        .args(["checkout", "--quiet", "--force", &remote]))
+    {
         return Up::Fail("checkout failed".into());
     }
-    if !ok(Command::new(&cargo).args(["build", "--release", "--locked", "--quiet"]).current_dir(&c)) {
+    if !ok(Command::new(&cargo)
+        .args(["build", "--release", "--locked", "--quiet"])
+        .current_dir(&c))
+    {
         return Up::Fail("build failed".into());
     }
-    let nb = c.join("target").join("release").join(if cfg!(windows) { "noname.exe" } else { "noname" });
-    let Ok(me) = std::env::current_exe() else { return Up::Fail("unknown install path".into()) };
+    let nb = c.join("target").join("release").join(if cfg!(windows) {
+        "noname.exe"
+    } else {
+        "noname"
+    });
+    let Ok(me) = std::env::current_exe() else {
+        return Up::Fail("unknown install path".into());
+    };
     if let Err(e) = swap(&nb, &me) {
         return Up::Fail(format!("install failed: {e}"));
     }
@@ -186,21 +245,40 @@ fn swap(nb: &Path, me: &Path) -> std::io::Result<()> {
 }
 
 fn newer(a: &str, b: &str) -> bool {
-    let p = |s: &str| s.trim_start_matches('v').split(['.', '-']).map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let p = |s: &str| {
+        s.trim_start_matches('v')
+            .split(['.', '-'])
+            .map(|x| x.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
     p(a) > p(b)
 }
 
 fn release() -> Up {
-    let Some(curl) = sys::which("curl") else { return Up::Skip("needs curl".into()) };
-    let Some(tar) = sys::which("tar") else { return Up::Skip("needs tar".into()) };
+    let Some(curl) = sys::which("curl") else {
+        return Up::Skip("needs curl".into());
+    };
+    let Some(tar) = sys::which("tar") else {
+        return Up::Skip("needs tar".into());
+    };
     let f = sys::cfgfile("update-check");
     if let Some(d) = Path::new(&f).parent() {
         let _ = std::fs::create_dir_all(d);
     }
     let _ = std::fs::write(&f, now().to_string());
-    let api = URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest";
-    let j = out(Command::new(&curl).args(["-fsSL", "-H", "Accept: application/vnd.github+json", "-A", "noname-updater", &api]));
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) else { return Up::Fail("could not reach github".into()) };
+    let api =
+        URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest";
+    let j = out(Command::new(&curl).args([
+        "-fsSL",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-A",
+        "noname-updater",
+        &api,
+    ]));
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) else {
+        return Up::Fail("could not reach github".into());
+    };
     let tag = v["tag_name"].as_str().unwrap_or("").to_string();
     if tag.is_empty() {
         return Up::Fail("no release found".into());
@@ -210,7 +288,12 @@ fn release() -> Up {
     }
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
     let name = format!("noname-{TARGET}.{ext}");
-    let Some(url) = v["assets"].as_array().and_then(|a| a.iter().find(|x| x["name"] == name.as_str())).and_then(|x| x["browser_download_url"].as_str()).map(|s| s.to_string()) else {
+    let Some(url) = v["assets"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["name"] == name.as_str()))
+        .and_then(|x| x["browser_download_url"].as_str())
+        .map(|s| s.to_string())
+    else {
         return Up::Fail(format!("no build for {TARGET}"));
     };
     let d = cache().with_file_name("dl");
@@ -219,14 +302,24 @@ fn release() -> Up {
         return Up::Fail("no cache folder".into());
     }
     let arc = d.join(&name);
-    if !ok(Command::new(&curl).args(["-fsSL", "-A", "noname-updater", "-o"]).arg(&arc).arg(&url)) {
+    if !ok(Command::new(&curl)
+        .args(["-fsSL", "-A", "noname-updater", "-o"])
+        .arg(&arc)
+        .arg(&url))
+    {
         return Up::Fail("download failed".into());
     }
     if !ok(Command::new(&tar).arg("-xf").arg(&arc).arg("-C").arg(&d)) {
         return Up::Fail("could not unpack".into());
     }
-    let nb = d.join(if cfg!(windows) { "noname.exe" } else { "noname" });
-    let Ok(me) = std::env::current_exe() else { return Up::Fail("unknown install path".into()) };
+    let nb = d.join(if cfg!(windows) {
+        "noname.exe"
+    } else {
+        "noname"
+    });
+    let Ok(me) = std::env::current_exe() else {
+        return Up::Fail("unknown install path".into());
+    };
     if let Err(e) = swap(&nb, &me) {
         return Up::Fail(format!("install failed: {e}"));
     }

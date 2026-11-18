@@ -1,3 +1,5 @@
+//! The opencode engine: one `opencode run --format json` per message.
+
 use std::process::Command;
 
 use serde_json::Value;
@@ -6,8 +8,9 @@ use super::codex::{Cx, one, sv};
 use super::*;
 
 /// The model from the opencode config (`"model": "provider/model"`), or "opencode".
-pub fn cfg_model() -> String {
-    let h = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", crate::sys::home()));
+pub(crate) fn cfg_model() -> String {
+    let h = std::env::var("XDG_CONFIG_HOME")
+        .unwrap_or_else(|_| format!("{}/.config", crate::sys::home()));
     for f in ["opencode.jsonc", "opencode.json"] {
         if let Ok(t) = std::fs::read_to_string(format!("{h}/opencode/{f}")) {
             // top level keys sit at two spaces; nested ones are indented deeper
@@ -25,15 +28,23 @@ pub fn cfg_model() -> String {
 }
 
 /// `/name args` -> (`name`, `args`), for running an opencode command or skill with `--command`.
-pub fn split_cmd(x: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_cmd(x: &str) -> Option<(&str, &str)> {
     let r = x.strip_prefix('/')?;
     let (n, a) = r.split_once(char::is_whitespace).unwrap_or((r, ""));
-    let ok = !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'));
+    let ok = !n.is_empty()
+        && n.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'));
     ok.then(|| (n, a.trim()))
 }
 
 /// One `opencode run` per message, like the Codex engine runs one `codex exec`.
-pub fn build(c: &Cx, mode: usize, imgs: &[(&'static str, Vec<u8>)], t: u64, x: &str) -> Command {
+pub(crate) fn build(
+    c: &Cx,
+    mode: usize,
+    imgs: &[(&'static str, Vec<u8>)],
+    t: u64,
+    x: &str,
+) -> Command {
     let mut cmd = Command::new(crate::sys::bin("opencode"));
     cmd.args(["run", "--format", "json", "--thinking"]);
     match mode {
@@ -65,7 +76,11 @@ pub fn build(c: &Cx, mode: usize, imgs: &[(&'static str, Vec<u8>)], t: u64, x: &
         cmd.arg(x);
     }
     for (k, (m, b)) in imgs.iter().enumerate() {
-        let f = std::env::temp_dir().join(format!("noname-{}-{t}-{k}.{}", std::process::id(), crate::img::ext(m)));
+        let f = std::env::temp_dir().join(format!(
+            "noname-{}-{t}-{k}.{}",
+            std::process::id(),
+            crate::img::ext(m)
+        ));
         if std::fs::write(&f, b).is_ok() {
             cmd.arg("-f").arg(f);
         }
@@ -95,7 +110,11 @@ impl App {
                     return;
                 }
                 let id = sv(p, "id");
-                let b = if ty == "reasoning" { B::Th(txt.trim().to_string()) } else { B::T(txt.trim().to_string()) };
+                let b = if ty == "reasoning" {
+                    B::Th(txt.trim().to_string())
+                } else {
+                    B::T(txt.trim().to_string())
+                };
                 match self.cx.as_ref().and_then(|c| c.im.get(&id).copied()) {
                     Some(i) => self.bs[i] = b,
                     None => {
@@ -115,15 +134,27 @@ impl App {
                 }
             }
             "error" => {
-                let m = ["/error/data/message", "/error/message", "/error/name"].iter().find_map(|k| e.pointer(k).and_then(|x| x.as_str())).unwrap_or("error");
+                let m = ["/error/data/message", "/error/message", "/error/name"]
+                    .iter()
+                    .find_map(|k| e.pointer(k).and_then(|x| x.as_str()))
+                    .unwrap_or("error");
                 self.bs.push(B::T(format!("**opencode:** {}", one(m, 200))));
             }
             "_eof" => {
-                let (tok, t0) = self.cx.as_ref().map(|c| (c.tok, c.t0)).unwrap_or((0, self.t));
+                let (tok, t0) = self
+                    .cx
+                    .as_ref()
+                    .map(|c| (c.tok, c.t0))
+                    .unwrap_or((0, self.t));
                 if tok > 0 {
                     let secs = (self.t - t0) as f32 * 0.033;
-                    let tk = if tok >= 1000 { format!("{:.1}k", tok as f64 / 1000.0) } else { tok.to_string() };
-                    self.bs.push(B::Rc(format!("{secs:.1}s  ·  {tk} tok"), self.t.max(1)));
+                    let tk = if tok >= 1000 {
+                        format!("{:.1}k", tok as f64 / 1000.0)
+                    } else {
+                        tok.to_string()
+                    };
+                    self.bs
+                        .push(B::Rc(format!("{secs:.1}s  ·  {tk} tok"), self.t.max(1)));
                 }
                 self.cev(e);
             }
@@ -137,7 +168,19 @@ impl App {
         let inp = &s["input"];
         if nm == "todowrite" {
             if let Some(a) = inp["todos"].as_array() {
-                self.todo = a.iter().map(|x| (match sv(x, "status").as_str() { "completed" => 2, "in_progress" => 1, _ => 0 }, sv(x, "content"))).collect();
+                self.todo = a
+                    .iter()
+                    .map(|x| {
+                        (
+                            match sv(x, "status").as_str() {
+                                "completed" => 2,
+                                "in_progress" => 1,
+                                _ => 0,
+                            },
+                            sv(x, "content"),
+                        )
+                    })
+                    .collect();
             }
             return;
         }
@@ -162,19 +205,41 @@ impl App {
             "completed" => St::Ok,
             _ => St::Run,
         };
-        let out = if st == St::Err { sv(s, "error") } else { sv(s, "output") };
+        let out = if st == St::Err {
+            sv(s, "error")
+        } else {
+            sv(s, "output")
+        };
         let ls: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
         let exit = s["metadata"]["exit"].as_i64().unwrap_or(0);
         let sum = match (k, st) {
             (_, St::Run) => String::new(),
             (Tk::Bash, _) if exit != 0 => format!("exit {exit}"),
-            (_, St::Err) if out.contains("rejected permission") => "not allowed here, use auto or bypass mode".into(),
-            (_, St::Err) => ls.first().map(|l| one(l, 48)).unwrap_or_else(|| "failed".into()),
+            (_, St::Err) if out.contains("rejected permission") => {
+                "not allowed here, use auto or bypass mode".into()
+            }
+            (_, St::Err) => ls
+                .first()
+                .map(|l| one(l, 48))
+                .unwrap_or_else(|| "failed".into()),
             (Tk::Bash, _) => ls.last().map(|l| one(l, 48)).unwrap_or_else(|| "ok".into()),
             _ => "done".into(),
         };
-        let st = if k == Tk::Bash && exit != 0 { St::Err } else { st };
-        let body: Vec<Ln> = if k == Tk::Bash { ls.iter().rev().take(12).rev().map(|l| Ln::P(one(l, 200))).collect() } else { vec![] };
+        let st = if k == Tk::Bash && exit != 0 {
+            St::Err
+        } else {
+            st
+        };
+        let body: Vec<Ln> = if k == Tk::Bash {
+            ls.iter()
+                .rev()
+                .take(12)
+                .rev()
+                .map(|l| Ln::P(one(l, 200)))
+                .collect()
+        } else {
+            vec![]
+        };
         let id = {
             let c = sv(p, "callID");
             if c.is_empty() { sv(p, "id") } else { c }
@@ -192,7 +257,16 @@ impl App {
                 }
             }
             None => {
-                self.bs.push(B::Tl(Tool { k, nm, a, sum, body, st, t0: now, t1: if st == St::Run { 0 } else { now } }));
+                self.bs.push(B::Tl(Tool {
+                    k,
+                    nm,
+                    a,
+                    sum,
+                    body,
+                    st,
+                    t0: now,
+                    t1: if st == St::Run { 0 } else { now },
+                }));
                 let i = self.bs.len() - 1;
                 self.sel = Some(i);
                 if let Some(c) = &mut self.cx {
@@ -211,7 +285,10 @@ mod tests {
     #[test]
     fn splits_slash_commands() {
         assert_eq!(split_cmd("/researcher rust"), Some(("researcher", "rust")));
-        assert_eq!(split_cmd("/deep-research   best way to X?  "), Some(("deep-research", "best way to X?")));
+        assert_eq!(
+            split_cmd("/deep-research   best way to X?  "),
+            Some(("deep-research", "best way to X?"))
+        );
         assert_eq!(split_cmd("/researcher"), Some(("researcher", "")));
         assert_eq!(split_cmd("/ps:run\nmore"), Some(("ps:run", "more")));
         assert_eq!(split_cmd("/etc/hosts"), None);
@@ -221,8 +298,25 @@ mod tests {
 
     #[test]
     fn command_runs_with_dash_dash_command() {
-        let c = Cx { tid: None, ch: None, rx: None, args: vec![], im: Default::default(), last: false, t0: 0, eng: Eng::Opencode, tok: 0, err: String::new(), fin: false };
-        let a = |x: &str| build(&c, 0, &[], 0, x).get_args().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>();
+        let c = Cx {
+            tid: None,
+            ch: None,
+            rx: None,
+            args: vec![],
+            im: Default::default(),
+            last: false,
+            t0: 0,
+            eng: Eng::Opencode,
+            tok: 0,
+            err: String::new(),
+            fin: false,
+        };
+        let a = |x: &str| {
+            build(&c, 0, &[], 0, x)
+                .get_args()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        };
         let v = a("/researcher rust");
         assert!(v.windows(2).any(|w| w == ["--command", "researcher"]));
         assert_eq!(v.last().map(String::as_str), Some("rust"));

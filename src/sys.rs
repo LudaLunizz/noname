@@ -1,8 +1,13 @@
+//! Platform glue: home folder, binary lookup, process tracking and cleanup, clipboard access and
+//! local time, with one implementation per operating system.
+
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
 pub fn home() -> String {
-    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default()
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
 }
 
 pub fn cfgdir() -> String {
@@ -16,30 +21,61 @@ pub fn cfgdir() -> String {
 
 pub fn cfgfile(n: &str) -> String {
     let d = cfgdir();
-    if cfg!(windows) { format!("{d}\\{n}") } else { format!("{d}/{n}") }
+    if cfg!(windows) {
+        format!("{d}\\{n}")
+    } else {
+        format!("{d}/{n}")
+    }
 }
 
 pub fn bin(b: &str) -> std::ffi::OsString {
-    which(b).map(|p| p.into_os_string()).unwrap_or_else(|| b.into())
+    which(b)
+        .map(|p| p.into_os_string())
+        .unwrap_or_else(|| b.into())
 }
 
 #[cfg(unix)]
 pub fn which(b: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let h = home();
-    let mut ds: Vec<String> = std::env::var("PATH").unwrap_or_default().split(':').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
-    for d in [format!("{h}/.cargo/bin"), format!("{h}/.local/bin"), format!("{h}/bin"), "/usr/local/bin".into(), "/usr/games".into(), "/usr/local/games".into(), "/opt/homebrew/bin".into(), "/home/linuxbrew/.linuxbrew/bin".into(), "/snap/bin".into()] {
+    let mut ds: Vec<String> = std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|x| !x.is_empty())
+        .map(|x| x.to_string())
+        .collect();
+    for d in [
+        format!("{h}/.cargo/bin"),
+        format!("{h}/.local/bin"),
+        format!("{h}/bin"),
+        "/usr/local/bin".into(),
+        "/usr/games".into(),
+        "/usr/local/games".into(),
+        "/opt/homebrew/bin".into(),
+        "/home/linuxbrew/.linuxbrew/bin".into(),
+        "/snap/bin".into(),
+    ] {
         if !ds.contains(&d) {
             ds.push(d);
         }
     }
-    ds.into_iter().map(|d| std::path::Path::new(&d).join(b)).find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+    ds.into_iter()
+        .map(|d| std::path::Path::new(&d).join(b))
+        .find(|p| {
+            p.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
 }
 
 #[cfg(windows)]
 pub fn which(b: &str) -> Option<PathBuf> {
     let h = home();
-    let mut ds: Vec<String> = std::env::var("PATH").unwrap_or_default().split(';').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
+    let mut ds: Vec<String> = std::env::var("PATH")
+        .unwrap_or_default()
+        .split(';')
+        .filter(|x| !x.is_empty())
+        .map(|x| x.to_string())
+        .collect();
     let mut extra = vec![format!("{h}\\.local\\bin"), format!("{h}\\.cargo\\bin")];
     if let Ok(a) = std::env::var("APPDATA") {
         extra.push(format!("{a}\\npm"));
@@ -49,7 +85,12 @@ pub fn which(b: &str) -> Option<PathBuf> {
             ds.push(d);
         }
     }
-    let exts: Vec<String> = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into()).split(';').filter(|x| !x.is_empty()).map(|x| x.to_lowercase()).collect();
+    let exts: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|x| !x.is_empty())
+        .map(|x| x.to_lowercase())
+        .collect();
     let has_ext = std::path::Path::new(b).extension().is_some();
     for d in ds {
         let base = std::path::Path::new(&d).join(b);
@@ -234,23 +275,34 @@ fn job() -> isize {
         }
         let mut info: win::JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
         info.BasicLimitInformation.LimitFlags = win::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        win::SetInformationJobObject(j, win::JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of_val(&info) as u32);
+        win::SetInformationJobObject(
+            j,
+            win::JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of_val(&info) as u32,
+        );
         j as isize
     })
 }
 
 #[cfg(windows)]
 mod win {
-    pub use windows_sys::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
-    pub use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    pub(super) use windows_sys::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
+    pub(super) use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
     };
 }
 
 pub fn open(path: &str, line: &str) {
     let mut c = if let Ok(t) = std::env::var("NONAME_OPEN") {
         let t = t.replace("{line}", if line.is_empty() { "1" } else { line });
-        let t = if t.contains("{}") { t.replace("{}", path) } else { format!("{t} {path}") };
+        let t = if t.contains("{}") {
+            t.replace("{}", path)
+        } else {
+            format!("{t} {path}")
+        };
         let mut v = t.split_whitespace().map(str::to_string);
         let mut c = Command::new(v.next().unwrap_or_default());
         c.args(v);
@@ -268,7 +320,9 @@ pub fn open(path: &str, line: &str) {
         c.arg(path);
         c
     };
-    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -279,7 +333,9 @@ pub fn open(path: &str, line: &str) {
 
 /// Opens a web link in the default browser (NONAME_OPEN is for files, so it is not used here).
 pub fn open_url(url: &str) {
-    if !(url.starts_with("https://") || url.starts_with("http://")) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if !(url.starts_with("https://") || url.starts_with("http://"))
+        || url.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
         return;
     }
     let mut c = if cfg!(target_os = "macos") {
@@ -297,7 +353,9 @@ pub fn open_url(url: &str) {
         c.arg(url);
         c
     };
-    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -380,7 +438,9 @@ pub fn open_dir(path: &str) {
         c.arg(path);
         c
     };
-    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -422,15 +482,28 @@ pub fn setclip(t: &str) -> bool {
         Some(("pbcopy", &[]))
     } else if cfg!(windows) {
         None
-    } else if std::env::var("WAYLAND_DISPLAY").is_ok() && which("wl-copy").is_some() && !xclip_first() {
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok()
+        && which("wl-copy").is_some()
+        && !xclip_first()
+    {
         Some(("wl-copy", &[]))
     } else if which("xclip").is_some() {
         Some(("xclip", &["-selection", "clipboard"]))
     } else {
         None
     };
-    let Some((p, a)) = c else { return cfg!(windows) };
-    let Ok(mut ch) = Command::new(p).args(a).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return false };
+    let Some((p, a)) = c else {
+        return cfg!(windows);
+    };
+    let Ok(mut ch) = Command::new(p)
+        .args(a)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
     if let Some(mut i) = ch.stdin.take() {
         use std::io::Write;
         let _ = i.write_all(t.as_bytes());
@@ -458,17 +531,21 @@ fn tm() -> Option<Tm> {
             }
         }
         if let Some(k) = e("KITTY_WINDOW_ID").filter(|k| k.chars().all(|c| c.is_ascii_digit())) {
-            if e("TMUX").is_none() || (e("KITTY_LISTEN_ON").is_some() && which("kitten").is_some()) {
+            if e("TMUX").is_none() || (e("KITTY_LISTEN_ON").is_some() && which("kitten").is_some())
+            {
                 return Some(Tm::Kt(k));
             }
         }
-        if let Some(w) = e("ALACRITTY_WINDOW_ID").filter(|w| w.chars().all(|c| c.is_ascii_digit())) {
+        if let Some(w) = e("ALACRITTY_WINDOW_ID").filter(|w| w.chars().all(|c| c.is_ascii_digit()))
+        {
             if e("ALACRITTY_SOCKET").is_some() && which("alacritty").is_some() {
                 return Some(Tm::Al(w));
             }
         }
         if e("GNOME_TERMINAL_SERVICE").is_some() && which("gsettings").is_some() {
-            let id = gs(&["get", "org.gnome.Terminal.ProfilesList", "default"])?.trim_matches('\'').to_string();
+            let id = gs(&["get", "org.gnome.Terminal.ProfilesList", "default"])?
+                .trim_matches('\'')
+                .to_string();
             if !id.is_empty() && ok(&id) {
                 return Some(Tm::Gt(id));
             }
@@ -479,14 +556,23 @@ fn tm() -> Option<Tm> {
 }
 
 fn gs(a: &[&str]) -> Option<String> {
-    let o = Command::new("gsettings").args(a).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
-    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    let o = Command::new("gsettings")
+        .args(a)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 fn gpath(t: &Tm) -> String {
     match t {
         Tm::Px(p) => format!("org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{p}/"),
-        Tm::Gt(p) => format!("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:{p}/"),
+        Tm::Gt(p) => {
+            format!("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:{p}/")
+        }
         _ => String::new(),
     }
 }
@@ -495,7 +581,11 @@ fn gget(t: &Tm) -> Option<String> {
     let p = gpath(t);
     match t {
         Tm::Px(_) => gs(&["get", &p, "opacity"]),
-        Tm::Gt(_) => Some(format!("{} {}", gs(&["get", &p, "use-transparent-background"])?, gs(&["get", &p, "background-transparency-percent"])?)),
+        Tm::Gt(_) => Some(format!(
+            "{} {}",
+            gs(&["get", &p, "use-transparent-background"])?,
+            gs(&["get", &p, "background-transparency-percent"])?
+        )),
         _ => None,
     }
 }
@@ -505,8 +595,11 @@ fn gput(t: &Tm, v: &str) -> bool {
     match t {
         Tm::Px(_) => gs(&["set", &p, "opacity", v]).is_some(),
         Tm::Gt(_) => {
-            let Some((on, pc)) = v.split_once(' ') else { return false };
-            gs(&["set", &p, "use-transparent-background", on]).is_some() && gs(&["set", &p, "background-transparency-percent", pc]).is_some()
+            let Some((on, pc)) = v.split_once(' ') else {
+                return false;
+            };
+            gs(&["set", &p, "use-transparent-background", on]).is_some()
+                && gs(&["set", &p, "background-transparency-percent", pc]).is_some()
         }
         _ => false,
     }
@@ -516,21 +609,44 @@ fn kt(id: &str, v: f32, tog: bool) -> bool {
     let to = std::env::var("KITTY_LISTEN_ON").unwrap_or_default();
     if !to.is_empty() && which("kitten").is_some() {
         let mut c = Command::new("kitten");
-        c.args(["@", "--to", &to, "set-background-opacity", "-m", &format!("id:{id}")]);
+        c.args([
+            "@",
+            "--to",
+            &to,
+            "set-background-opacity",
+            "-m",
+            &format!("id:{id}"),
+        ]);
         if tog {
             c.arg("--toggle");
         }
         c.arg(format!("{v:.2}"));
-        return c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        return c
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
     }
     use std::io::Write;
-    let j = format!(r#"{{"cmd":"set-background-opacity","version":[0,14,2],"no_response":true,"payload":{{"opacity":{v:.2},"match_window":"id:{id}","toggle":{tog}}}}}"#);
+    let j = format!(
+        r#"{{"cmd":"set-background-opacity","version":[0,14,2],"no_response":true,"payload":{{"opacity":{v:.2},"match_window":"id:{id}","toggle":{tog}}}}}"#
+    );
     let mut o = std::io::stdout();
-    write!(o, "\x1bP@kitty-cmd{j}\x1b\\").and_then(|_| o.flush()).is_ok()
+    write!(o, "\x1bP@kitty-cmd{j}\x1b\\")
+        .and_then(|_| o.flush())
+        .is_ok()
 }
 
 fn al(a: &[&str]) -> bool {
-    Command::new("alacritty").arg("msg").args(a).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+    Command::new("alacritty")
+        .arg("msg")
+        .args(a)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 static OPON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -541,15 +657,27 @@ fn origf(id: &str) -> String {
 
 fn others(want: &str) -> bool {
     let me = std::process::id();
-    let Ok(rd) = std::fs::read_dir("/proc") else { return false };
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return false;
+    };
     rd.flatten().any(|e| {
-        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { return false };
-        if pid == me || std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|c| c.trim() != "noname").unwrap_or(true) {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            return false;
+        };
+        if pid == me
+            || std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .map(|c| c.trim() != "noname")
+                .unwrap_or(true)
+        {
             return false;
         }
-        let Ok(env) = std::fs::read(format!("/proc/{pid}/environ")) else { return false };
+        let Ok(env) = std::fs::read(format!("/proc/{pid}/environ")) else {
+            return false;
+        };
         let vs: Vec<&[u8]> = env.split(|b| *b == 0).collect();
-        let hit = vs.iter().any(|v| *v == want.as_bytes() || (want.ends_with('=') && v.starts_with(want.as_bytes())));
+        let hit = vs.iter().any(|v| {
+            *v == want.as_bytes() || (want.ends_with('=') && v.starts_with(want.as_bytes()))
+        });
         hit && !vs.iter().any(|v| v.starts_with(b"NONAME_MOCK="))
     })
 }
@@ -557,8 +685,12 @@ fn others(want: &str) -> bool {
 pub fn opacity_scope() -> &'static str {
     match tm() {
         Some(Tm::Px(_)) | Some(Tm::Gt(_)) => "all tabs with this profile",
-        Some(Tm::Kt(_)) if std::env::var("KITTY_LISTEN_ON").is_ok_and(|v| !v.is_empty()) => "this kitty window",
-        Some(Tm::Kt(_)) => "this kitty window, needs allow_remote_control and dynamic_background_opacity",
+        Some(Tm::Kt(_)) if std::env::var("KITTY_LISTEN_ON").is_ok_and(|v| !v.is_empty()) => {
+            "this kitty window"
+        }
+        Some(Tm::Kt(_)) => {
+            "this kitty window, needs allow_remote_control and dynamic_background_opacity"
+        }
         Some(Tm::Al(_)) => "this window",
         None => "",
     }

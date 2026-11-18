@@ -1,13 +1,22 @@
-#![deny(clippy::mem_forget)]
+//! noname: a quiet terminal UI for Claude Code (and Codex, Antigravity and opencode).
+//!
+//! The binary in `main.rs` draws the interface; this library holds the application state ([`App`]),
+//! the engines that talk to the CLIs, and the platform helpers.
+
+mod agy;
 pub mod bg;
+mod codex;
 pub mod free;
 pub mod img;
+mod live;
+mod opencode;
 pub mod sys;
 pub mod upd;
-mod codex;
-mod agy;
-mod opencode;
-mod live;
+
+/// One entry of the model list: value, display name, description and effort levels.
+pub type ModelEntry = (String, String, String, Vec<String>);
+/// One rewind choice as shown in the rewind picker.
+pub type RewindItem = (String, String, String);
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -18,8 +27,8 @@ use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers as Km, KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    KeyModifiers as Km, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -43,16 +52,47 @@ pub mod pal {
     }
 
     const BUILTIN: [Theme; 4] = [
-        Theme { name: "default", desc: "white, gray, light purple", c: [0xe4e4e8, 0xffffff, 0xb4b4bc, 0x85858f, 0xc3b0ff, 0xd8caff, 0xcdc4e8, 0xa9d6e5, 0xa6e3a1, 0xf38ba8, 0xe6b3ff, 0x161618] },
-        Theme { name: "dracula", desc: "purple, pink, neon", c: [0xf8f8f2, 0xffffff, 0xc3c6dd, 0x7b88b8, 0xbd93f9, 0xff92df, 0xcaa9fa, 0x8be9fd, 0x50fa7b, 0xff5555, 0xff79c6, 0x282a36] },
-        Theme { name: "tokyo-night", desc: "night blue, city lights", c: [0xc0caf5, 0xe0e6ff, 0xa9b1d6, 0x737aa2, 0x7aa2f7, 0xbb9af7, 0xb4c2f0, 0x7dcfff, 0x9ece6a, 0xf7768e, 0xff9e64, 0x1a1b26] },
-        Theme { name: "mocha", desc: "soft pastels on dark roast", c: [0xcdd6f4, 0xeef1fc, 0xbac2de, 0x9399b2, 0xcba6f7, 0xb4befe, 0xf5c2e7, 0x89dceb, 0xa6e3a1, 0xf38ba8, 0xf5c2e7, 0x1e1e2e] },
+        Theme {
+            name: "default",
+            desc: "white, gray, light purple",
+            c: [
+                0xe4e4e8, 0xffffff, 0xb4b4bc, 0x85858f, 0xc3b0ff, 0xd8caff, 0xcdc4e8, 0xa9d6e5,
+                0xa6e3a1, 0xf38ba8, 0xe6b3ff, 0x161618,
+            ],
+        },
+        Theme {
+            name: "dracula",
+            desc: "purple, pink, neon",
+            c: [
+                0xf8f8f2, 0xffffff, 0xc3c6dd, 0x7b88b8, 0xbd93f9, 0xff92df, 0xcaa9fa, 0x8be9fd,
+                0x50fa7b, 0xff5555, 0xff79c6, 0x282a36,
+            ],
+        },
+        Theme {
+            name: "tokyo-night",
+            desc: "night blue, city lights",
+            c: [
+                0xc0caf5, 0xe0e6ff, 0xa9b1d6, 0x737aa2, 0x7aa2f7, 0xbb9af7, 0xb4c2f0, 0x7dcfff,
+                0x9ece6a, 0xf7768e, 0xff9e64, 0x1a1b26,
+            ],
+        },
+        Theme {
+            name: "mocha",
+            desc: "soft pastels on dark roast",
+            c: [
+                0xcdd6f4, 0xeef1fc, 0xbac2de, 0x9399b2, 0xcba6f7, 0xb4befe, 0xf5c2e7, 0x89dceb,
+                0xa6e3a1, 0xf38ba8, 0xf5c2e7, 0x1e1e2e,
+            ],
+        },
     ];
 
     static CUR: AtomicUsize = AtomicUsize::new(0);
     static ALL: std::sync::OnceLock<Vec<Theme>> = std::sync::OnceLock::new();
 
-    const KEYS: [&str; 12] = ["fg", "bright", "muted", "faint", "accent", "accent2", "soft", "cyan", "green", "red", "pink", "base"];
+    const KEYS: [&str; 12] = [
+        "fg", "bright", "muted", "faint", "accent", "accent2", "soft", "cyan", "green", "red",
+        "pink", "base",
+    ];
 
     pub fn dir() -> String {
         crate::sys::cfgfile("themes")
@@ -60,7 +100,11 @@ pub mod pal {
 
     fn hx(v: &str) -> Option<u32> {
         let v = v.trim().trim_start_matches('#');
-        let v = if v.len() == 3 { v.chars().flat_map(|c| [c, c]).collect() } else { v.to_string() };
+        let v = if v.len() == 3 {
+            v.chars().flat_map(|c| [c, c]).collect()
+        } else {
+            v.to_string()
+        };
         if v.len() != 6 {
             return None;
         }
@@ -72,7 +116,9 @@ pub mod pal {
         let mut desc = String::from("custom");
         for l in src.lines() {
             let l = l.trim();
-            let Some((k, v)) = l.split_once('=') else { continue };
+            let Some((k, v)) = l.split_once('=') else {
+                continue;
+            };
             let k = k.trim().to_lowercase();
             if k.starts_with('#') {
                 continue;
@@ -83,11 +129,17 @@ pub mod pal {
                 c[i] = x;
             }
         }
-        Theme { name: Box::leak(name.to_string().into_boxed_str()), desc: Box::leak(desc.into_boxed_str()), c }
+        Theme {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            desc: Box::leak(desc.into_boxed_str()),
+            c,
+        }
     }
 
     fn user() -> Vec<Theme> {
-        let Ok(rd) = std::fs::read_dir(dir()) else { return Vec::new() };
+        let Ok(rd) = std::fs::read_dir(dir()) else {
+            return Vec::new();
+        };
         let mut v: Vec<(String, String)> = rd
             .flatten()
             .filter_map(|e| {
@@ -123,15 +175,28 @@ pub mod pal {
         CUR.store(i.min(all().len() - 1), Ordering::Relaxed);
     }
     pub fn find(n: &str) -> Option<usize> {
-        let k = |x: &str| x.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+        let k = |x: &str| {
+            x.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        };
         let n = k(n);
-        all().iter().position(|t| k(t.name) == n || (n == "catppuccin" && t.name == "mocha") || (n == "tokyo" && t.name == "tokyo-night"))
+        all().iter().position(|t| {
+            k(t.name) == n
+                || (n == "catppuccin" && t.name == "mocha")
+                || (n == "tokyo" && t.name == "tokyo-night")
+        })
     }
     pub fn file() -> String {
         crate::sys::cfgfile("theme")
     }
     pub fn load() {
-        if let Some(i) = std::env::var("NONAME_THEME").ok().or_else(|| std::fs::read_to_string(file()).ok()).and_then(|x| find(&x)) {
+        if let Some(i) = std::env::var("NONAME_THEME")
+            .ok()
+            .or_else(|| std::fs::read_to_string(file()).ok())
+            .and_then(|x| find(&x))
+        {
             set(i);
         }
     }
@@ -146,18 +211,42 @@ pub mod pal {
         let v = all()[cur()].c[i];
         Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
     }
-    pub fn FG() -> Color { c(0) }
-    pub fn WH() -> Color { c(1) }
-    pub fn MU() -> Color { c(2) }
-    pub fn FA() -> Color { c(3) }
-    pub fn LI() -> Color { c(4) }
-    pub fn L2() -> Color { c(5) }
-    pub fn PE() -> Color { c(6) }
-    pub fn CY() -> Color { c(7) }
-    pub fn GR() -> Color { c(8) }
-    pub fn RD() -> Color { c(9) }
-    pub fn PK() -> Color { c(10) }
-    pub fn BASE() -> Color { c(11) }
+    pub fn FG() -> Color {
+        c(0)
+    }
+    pub fn WH() -> Color {
+        c(1)
+    }
+    pub fn MU() -> Color {
+        c(2)
+    }
+    pub fn FA() -> Color {
+        c(3)
+    }
+    pub fn LI() -> Color {
+        c(4)
+    }
+    pub fn L2() -> Color {
+        c(5)
+    }
+    pub fn PE() -> Color {
+        c(6)
+    }
+    pub fn CY() -> Color {
+        c(7)
+    }
+    pub fn GR() -> Color {
+        c(8)
+    }
+    pub fn RD() -> Color {
+        c(9)
+    }
+    pub fn PK() -> Color {
+        c(10)
+    }
+    pub fn BASE() -> Color {
+        c(11)
+    }
 
     #[cfg(test)]
     mod tests {
@@ -165,7 +254,10 @@ pub mod pal {
 
         #[test]
         fn parses_theme_file() {
-            let t = parse("mine", "# comment\ndesc = black and red\naccent = #e0362b\nfg=ececec\nred = #f00\nbogus = #123456\npink = nope\n");
+            let t = parse(
+                "mine",
+                "# comment\ndesc = black and red\naccent = #e0362b\nfg=ececec\nred = #f00\nbogus = #123456\npink = nope\n",
+            );
             assert_eq!(t.name, "mine");
             assert_eq!(t.desc, "black and red");
             assert_eq!(t.c[4], 0xe0362b);
@@ -177,8 +269,21 @@ pub mod pal {
     }
 }
 
-
-pub const MODELS: [&str; 13] = ["opus 5.5", "sonnet 5.5", "haiku 5.5", "fable 5.2", "fable 5.1", "opus 5", "sonnet 5", "fable 5", "opus 4.8", "opus 4.7", "opus 4.6", "sonnet 4.6", "haiku 4.5"];
+pub const MODELS: [&str; 13] = [
+    "opus 5.5",
+    "sonnet 5.5",
+    "haiku 5.5",
+    "fable 5.2",
+    "fable 5.1",
+    "opus 5",
+    "sonnet 5",
+    "fable 5",
+    "opus 4.8",
+    "opus 4.7",
+    "opus 4.6",
+    "sonnet 4.6",
+    "haiku 4.5",
+];
 /// Window opacity steps in the /noname menu, in percent.
 pub const OPAC: [u8; 8] = [100, 90, 80, 70, 60, 50, 40, 30];
 
@@ -187,11 +292,29 @@ pub const OPAC_DEFAULT: u8 = 100;
 
 /// noname's window opacity setting in percent (100 = leave the terminal alone).
 pub fn opac() -> u8 {
-    std::fs::read_to_string(sys::cfgfile("opacity")).ok().and_then(|s| s.trim().parse().ok()).filter(|v| OPAC.contains(v)).unwrap_or(OPAC_DEFAULT)
+    std::fs::read_to_string(sys::cfgfile("opacity"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|v| OPAC.contains(v))
+        .unwrap_or(OPAC_DEFAULT)
 }
 
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-pub const MID_ALL: [(&str, &str); 13] = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-2", "Fable 5.2"), ("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5", "Opus 5"), ("claude-sonnet-5", "Sonnet 5"), ("claude-fable-5", "Fable 5"), ("claude-opus-4-8", "Opus 4.8"), ("claude-opus-4-7", "Opus 4.7"), ("claude-opus-4-6", "Opus 4.6"), ("claude-sonnet-4-6", "Sonnet 4.6"), ("claude-haiku-4-5", "Haiku 4.5")];
+pub const MID_ALL: [(&str, &str); 13] = [
+    ("claude-opus-5-5", "Opus 5.5"),
+    ("claude-sonnet-5-5", "Sonnet 5.5"),
+    ("claude-haiku-5-5", "Haiku 5.5"),
+    ("claude-fable-5-2", "Fable 5.2"),
+    ("claude-fable-5-1", "Fable 5.1"),
+    ("claude-opus-5", "Opus 5"),
+    ("claude-sonnet-5", "Sonnet 5"),
+    ("claude-fable-5", "Fable 5"),
+    ("claude-opus-4-8", "Opus 4.8"),
+    ("claude-opus-4-7", "Opus 4.7"),
+    ("claude-opus-4-6", "Opus 4.6"),
+    ("claude-sonnet-4-6", "Sonnet 4.6"),
+    ("claude-haiku-4-5", "Haiku 4.5"),
+];
 pub const MODES: [&str; 4] = ["default", "plan", "auto", "bypass"];
 pub const CMDS: [(&str, &str); 9] = [
     ("btw", "side question, main chat keeps going"),
@@ -364,7 +487,7 @@ pub struct App {
     pub rw: Option<(usize, Option<usize>)>,
     pub sug: Option<String>,
     pub ms: usize,
-    pub rs: Option<(Vec<(String, String, String)>, usize)>,
+    pub rs: Option<(Vec<RewindItem>, usize)>,
     pub rq: String,
     pub bp: Option<(usize, Option<&'static str>)>,
     pub tp: Option<(usize, usize)>,
@@ -410,7 +533,7 @@ pub struct App {
     pub retry: Option<(String, u64)>,
     pub hooks: Vec<(String, String, u64)>,
     pub stitle: String,
-    pub models: Vec<(String, String, String, Vec<String>)>,
+    pub models: Vec<ModelEntry>,
     pub links: std::cell::RefCell<Vec<(u16, u16, u16, String)>>,
     pub diff: Option<serde_json::Value>,
     pub msel: Option<(u16, u16, u16, u16)>,
@@ -460,10 +583,24 @@ pub fn tcol(k: u8) -> ratatui::style::Color {
     [pal::CY(), pal::GR(), pal::LI(), pal::PK()][k.min(3) as usize]
 }
 
-pub const TKIND: [(&str, &str, &str); 4] = [("$", "shell", "shells"), ("~", "monitor", "monitors"), ("&", "agent", "agents"), ("%", "workflow", "workflows")];
+pub const TKIND: [(&str, &str, &str); 4] = [
+    ("$", "shell", "shells"),
+    ("~", "monitor", "monitors"),
+    ("&", "agent", "agents"),
+    ("%", "workflow", "workflows"),
+];
 
 fn tl(k: Tk, a: &str, sum: &str, body: Vec<Ln>) -> Tool {
-    Tool { k, nm: k.nm().into(), a: a.into(), sum: sum.into(), body, st: St::Ok, t0: 0, t1: 0 }
+    Tool {
+        k,
+        nm: k.nm().into(),
+        a: a.into(),
+        sum: sum.into(),
+        body,
+        st: St::Ok,
+        t0: 0,
+        t1: 0,
+    }
 }
 fn p(s: &str) -> Ln {
     Ln::P(s.into())
@@ -606,7 +743,11 @@ impl App {
             cwd: "~/projects/rusttok".into(),
             br: "main".into(),
             btw: None,
-            todo: vec![(2, "feed.rs to delta time".into()), (2, "check build".into()), (0, "easing for swipe snap".into())],
+            todo: vec![
+                (2, "feed.rs to delta time".into()),
+                (2, "check build".into()),
+                (0, "easing for swipe snap".into()),
+            ],
             stodo: false,
             ask: None,
             ti: None,
@@ -678,7 +819,17 @@ impl App {
             retry: None,
             hooks: vec![],
             stitle: String::new(),
-            models: MID_ALL.iter().map(|(v, d)| (v.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect())).collect(),
+            models: MID_ALL
+                .iter()
+                .map(|(v, d)| {
+                    (
+                        v.to_string(),
+                        d.to_string(),
+                        String::new(),
+                        EFF.iter().map(|x| x.to_string()).collect(),
+                    )
+                })
+                .collect(),
             links: std::cell::RefCell::new(vec![]),
             diff: None,
             msel: None,
@@ -699,7 +850,11 @@ impl App {
     }
 
     pub fn secs(&self, t: &Tool) -> f32 {
-        let e = if t.st == St::Run { self.t } else { t.t1.max(t.t0) };
+        let e = if t.st == St::Run {
+            self.t
+        } else {
+            t.t1.max(t.t0)
+        };
         (e - t.t0) as f32 * 0.033
     }
 
@@ -740,7 +895,9 @@ impl App {
                     }
                     upd::Up::Ready(r) => {
                         self.ups = format!("{r} installed, restart to use");
-                        self.bs.push(B::Sys(format!("noname updated to {r}  ·  restart to use it")));
+                        self.bs.push(B::Sys(format!(
+                            "noname updated to {r}  ·  restart to use it"
+                        )));
                     }
                     upd::Up::Skip(m) | upd::Up::Fail(m) => {
                         if f {
@@ -832,7 +989,14 @@ impl App {
             Sp::Rc(x) => {
                 self.bs.push(B::Rc(x, self.t.max(1)));
                 if self.q.is_empty() && self.inp.is_empty() {
-                    self.sug = Some(["commit and push this", "can it get smoother?", "run the tests again"][self.n % 3].into());
+                    self.sug = Some(
+                        [
+                            "commit and push this",
+                            "can it get smoother?",
+                            "run the tests again",
+                        ][self.n % 3]
+                            .into(),
+                    );
                 }
             }
         }
@@ -865,11 +1029,24 @@ impl App {
         }
         if c == 'n' {
             self.q.push_front(Sp::Rc(rcfmt(4.1, 9_800, 0.03, 0.0)));
-            self.q.push_front(Sp::Tx("Okay, not pushed. The commit stays local on `main`.".into()));
+            self.q.push_front(Sp::Tx(
+                "Okay, not pushed. The commit stays local on `main`.".into(),
+            ));
         } else {
             self.q.push_front(Sp::Rc(rcfmt(6.8, 12_400, 0.04, 0.0)));
             self.q.push_front(Sp::Tx("Pushed to `origin/main`.".into()));
-            self.q.push_front(Sp::Tl(tl(Tk::Bash, "git push origin main", "pushed", vec![p("To github.com:netter/rusttok.git"), p("   a81d0c4..3f9c2e1  main -> main")]), 40));
+            self.q.push_front(Sp::Tl(
+                tl(
+                    Tk::Bash,
+                    "git push origin main",
+                    "pushed",
+                    vec![
+                        p("To github.com:netter/rusttok.git"),
+                        p("   a81d0c4..3f9c2e1  main -> main"),
+                    ],
+                ),
+                40,
+            ));
         }
     }
 
@@ -943,7 +1120,8 @@ impl App {
     pub fn setbg(&mut self, k: Option<&'static str>) {
         match k {
             Some(k) if !bg::exists(k) => {
-                self.bs.push(B::Sys(format!("{k} is not installed  ·  {}", bg::hint(k))));
+                self.bs
+                    .push(B::Sys(format!("{k} is not installed  ·  {}", bg::hint(k))));
                 return;
             }
             Some(k) => self.toast(format!("background  {k}")),
@@ -971,7 +1149,9 @@ impl App {
             }
             KeyCode::Up => q.sel = q.sel.saturating_sub(1),
             KeyCode::Down => q.sel = (q.sel + 1).min(n),
-            KeyCode::Char(c) if !other && c.is_ascii_digit() && c != '0' && (c as usize - '1' as usize) < n => {
+            KeyCode::Char(c)
+                if !other && c.is_ascii_digit() && c != '0' && (c as usize - '1' as usize) < n =>
+            {
                 let j = c as usize - '1' as usize;
                 q.sel = j;
                 if cur.multi {
@@ -988,14 +1168,33 @@ impl App {
                 }
                 self.inp.clear();
                 self.cur = 0;
-                let mut v: Vec<String> = if cur.multi { cur.opts.iter().zip(&q.pick).filter(|x| *x.1).map(|x| x.0.0.clone()).collect() } else { vec![] };
+                let mut v: Vec<String> = if cur.multi {
+                    cur.opts
+                        .iter()
+                        .zip(&q.pick)
+                        .filter(|x| *x.1)
+                        .map(|x| x.0.0.clone())
+                        .collect()
+                } else {
+                    vec![]
+                };
                 v.push(t);
                 self.qnext(v.join(", "));
             }
             KeyCode::Enter => {
                 let a = if cur.multi {
-                    let v: Vec<String> = cur.opts.iter().zip(&q.pick).filter(|x| *x.1).map(|x| x.0.0.clone()).collect();
-                    if v.is_empty() { cur.opts[q.sel].0.clone() } else { v.join(", ") }
+                    let v: Vec<String> = cur
+                        .opts
+                        .iter()
+                        .zip(&q.pick)
+                        .filter(|x| *x.1)
+                        .map(|x| x.0.0.clone())
+                        .collect();
+                    if v.is_empty() {
+                        cur.opts[q.sel].0.clone()
+                    } else {
+                        v.join(", ")
+                    }
                 } else {
                     cur.opts[q.sel].0.clone()
                 };
@@ -1086,10 +1285,13 @@ impl App {
 
     pub fn nrows(&self) -> Vec<(&'static str, String)> {
         vec![
-            ("auto-update", match upd::managed() {
-                Some(m) => format!("via {m}"),
-                None => if upd::enabled() { "on" } else { "off" }.into(),
-            }),
+            (
+                "auto-update",
+                match upd::managed() {
+                    Some(m) => format!("via {m}"),
+                    None => if upd::enabled() { "on" } else { "off" }.into(),
+                },
+            ),
             ("theme", pal::all()[pal::cur()].name.into()),
             ("default permission", MODES[defmode().unwrap_or(0)].into()),
             ("default effort", defeff().unwrap_or("claude").into()),
@@ -1103,20 +1305,51 @@ impl App {
             ("title", LAYOUT[3].1[lay(3)].into()),
             ("title visibility", LAYOUT[4].1[lay(4)].into()),
             ("location", LAYOUT[5].1[lay(5)].into()),
-            ("right-click paste", if rclick() { "on" } else { "off" }.into()),
+            (
+                "right-click paste",
+                if rclick() { "on" } else { "off" }.into(),
+            ),
             ("opacity", format!("{}%", opac())),
-            ("free token count", if free::enabled() { "on, middle of the footer" } else { "off" }.into()),
-            ("claude token count", if free::claude_enabled() { "on, after the free total" } else { "off" }.into()),
-            ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
+            (
+                "free token count",
+                if free::enabled() {
+                    "on, middle of the footer"
+                } else {
+                    "off"
+                }
+                .into(),
+            ),
+            (
+                "claude token count",
+                if free::claude_enabled() {
+                    "on, after the free total"
+                } else {
+                    "off"
+                }
+                .into(),
+            ),
+            (
+                "check for updates",
+                if self.ups.is_empty() {
+                    format!("{}  {}", upd::short(), upd::DATE)
+                } else {
+                    format!("{}  ·  {}", upd::short(), self.ups)
+                },
+            ),
         ]
     }
 
     pub fn cycleff(&mut self, up: bool) {
         let n = EFF.len() + 1;
-        let i = defeff().and_then(|e| EFF.iter().position(|x| *x == e)).map_or(0, |i| i + 1);
+        let i = defeff()
+            .and_then(|e| EFF.iter().position(|x| *x == e))
+            .map_or(0, |i| i + 1);
         let j = if up { (i + 1) % n } else { (i + n - 1) % n };
         setdefeff(j.checked_sub(1).map(|k| EFF[k]));
-        self.toast(format!("default effort  {}  (next session)", defeff().unwrap_or("claude")));
+        self.toast(format!(
+            "default effort  {}  (next session)",
+            defeff().unwrap_or("claude")
+        ));
     }
 
     pub fn setdefmode(&mut self, i: usize) {
@@ -1173,7 +1406,11 @@ impl App {
         }
         let _ = std::fs::write(&f, v.to_string());
         let sc = sys::opacity_scope();
-        self.toast(if v == 100 || sc.is_empty() { format!("opacity  {v}%") } else { format!("opacity  {v}%  ({sc})") });
+        self.toast(if v == 100 || sc.is_empty() {
+            format!("opacity  {v}%")
+        } else {
+            format!("opacity  {v}%  ({sc})")
+        });
     }
 
     pub fn settheme(&mut self, i: usize) {
@@ -1190,8 +1427,16 @@ impl App {
             self.ns = Some(0);
             return;
         }
-        if (c0 == "model" || c0 == "effort") && a0.trim().is_empty() && !self.is_codex() && self.lv.is_none() {
-            if c0 == "model" { self.modelpicker() } else { self.effortpicker() }
+        if (c0 == "model" || c0 == "effort")
+            && a0.trim().is_empty()
+            && !self.is_codex()
+            && self.lv.is_none()
+        {
+            if c0 == "model" {
+                self.modelpicker()
+            } else {
+                self.effortpicker()
+            }
             return;
         }
         if c0 == "tasks" || c0 == "bashes" {
@@ -1286,7 +1531,11 @@ impl App {
     }
 
     fn bi(&self) -> usize {
-        self.inp.char_indices().nth(self.cur).map(|x| x.0).unwrap_or(self.inp.len())
+        self.inp
+            .char_indices()
+            .nth(self.cur)
+            .map(|x| x.0)
+            .unwrap_or(self.inp.len())
     }
 
     pub fn ins(&mut self, c: char) {
@@ -1379,7 +1628,9 @@ impl App {
         if cs.get(j) != Some(&'@') {
             return None;
         }
-        let end = (j..cs.len()).find(|&i| cs[i].is_whitespace()).unwrap_or(cs.len());
+        let end = (j..cs.len())
+            .find(|&i| cs[i].is_whitespace())
+            .unwrap_or(cs.len());
         if end != self.cur {
             return None;
         }
@@ -1387,20 +1638,18 @@ impl App {
     }
 
     fn fpoll(&mut self) {
-        let q = self.attok().map(|x| x.1);
-        if q.is_none() {
+        let Some(q) = self.attok().map(|x| x.1) else {
             if self.fq.is_some() {
                 self.fq = None;
                 self.fsug.clear();
             }
             self.fhide = None;
             return;
-        }
-        if q == self.fq || self.t < self.fqt + 2 {
+        };
+        if self.fq.as_ref() == Some(&q) || self.t < self.fqt + 2 {
             return;
         }
         self.fqt = self.t;
-        let q = q.unwrap();
         self.fq = Some(q.clone());
         if !self.fsuggest(&q) {
             self.fsug = localfiles(&q);
@@ -1419,9 +1668,18 @@ impl App {
         let Some((j, _)) = self.attok() else { return };
         let cs: Vec<char> = self.inp.chars().collect();
         let dir = p.ends_with('/') || p.ends_with('\\');
-        let ins = format!("@{}{}", if p.contains(' ') { format!("\"{p}\"") } else { p.to_string() }, if dir { "" } else { " " });
+        let ins = format!(
+            "@{}{}",
+            if p.contains(' ') {
+                format!("\"{p}\"")
+            } else {
+                p.to_string()
+            },
+            if dir { "" } else { " " }
+        );
         let n = ins.chars().count();
-        self.inp = cs[..j].iter().collect::<String>() + &ins + &cs[self.cur..].iter().collect::<String>();
+        self.inp =
+            cs[..j].iter().collect::<String>() + &ins + &cs[self.cur..].iter().collect::<String>();
         self.cur = j + n;
         self.ms = 0;
         self.fq = None;
@@ -1429,7 +1687,8 @@ impl App {
 
     pub fn cpos(&self, x: u16, y: u16) -> Option<(usize, u16)> {
         let (yt, n, s0, x0) = self.cg.get();
-        (n > 0 && y >= yt && ((y - yt) as usize) < n).then(|| (s0 + (y - yt) as usize, x.saturating_sub(x0)))
+        (n > 0 && y >= yt && ((y - yt) as usize) < n)
+            .then(|| (s0 + (y - yt) as usize, x.saturating_sub(x0)))
     }
 
     pub fn cclamp(&self, x: u16, y: u16) -> (usize, u16) {
@@ -1476,18 +1735,31 @@ impl App {
         if n == 0 || p1.0 < s0 || p0.0 >= s0 + n {
             return None;
         }
-        let st = if p0.0 < s0 { (0, yt) } else { (x0.saturating_add(p0.1), yt + (p0.0 - s0) as u16) };
-        let en = if p1.0 >= s0 + n { (u16::MAX, yt + n as u16 - 1) } else { (x0.saturating_add(p1.1), yt + (p1.0 - s0) as u16) };
+        let st = if p0.0 < s0 {
+            (0, yt)
+        } else {
+            (x0.saturating_add(p0.1), yt + (p0.0 - s0) as u16)
+        };
+        let en = if p1.0 >= s0 + n {
+            (u16::MAX, yt + n as u16 - 1)
+        } else {
+            (x0.saturating_add(p1.1), yt + (p1.0 - s0) as u16)
+        };
         Some((st.0, st.1, en.0, en.1))
     }
 
     pub fn ctext(&self) -> String {
-        let Some((a, b)) = self.csel else { return String::new() };
+        let Some((a, b)) = self.csel else {
+            return String::new();
+        };
         let (p0, p1) = if a <= b { (a, b) } else { (b, a) };
         let bt = self.btx.borrow();
         let mut ls = vec![];
         for i in p0.0..=p1.0.min(bt.len().saturating_sub(1)) {
-            let (xa, xb) = (if i == p0.0 { p0.1 } else { 0 }, if i == p1.0 { p1.1 } else { u16::MAX });
+            let (xa, xb) = (
+                if i == p0.0 { p0.1 } else { 0 },
+                if i == p1.0 { p1.1 } else { u16::MAX },
+            );
             let mut l = String::new();
             let mut x = 0u16;
             for c in bt[i].chars() {
@@ -1503,7 +1775,12 @@ impl App {
     }
 
     pub fn click(&mut self, x: u16, y: u16) {
-        let hit = self.links.borrow().iter().find(|l| l.0 == y && x >= l.1 && x < l.2).map(|l| l.3.clone());
+        let hit = self
+            .links
+            .borrow()
+            .iter()
+            .find(|l| l.0 == y && x >= l.1 && x < l.2)
+            .map(|l| l.3.clone());
         if let Some(p) = hit {
             if p.starts_with("https://") || p.starts_with("http://") {
                 sys::open_url(&p);
@@ -1512,7 +1789,13 @@ impl App {
             }
             let (path, line) = sys::split_line(&p);
             let abs = sys::resolve(path);
-            let name = path.trim_end_matches('/').rsplit('/').next().filter(|x| !x.is_empty()).unwrap_or(path).to_string();
+            let name = path
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|x| !x.is_empty())
+                .unwrap_or(path)
+                .to_string();
             if abs.is_dir() {
                 sys::open_dir(&abs.to_string_lossy());
                 self.toast(format!("folder  {name}"));
@@ -1537,7 +1820,9 @@ impl App {
                 KeyCode::Up => p.off = p.off.saturating_sub(1),
                 KeyCode::Down => p.off = (p.off + 1).min(h.saturating_sub(1)),
                 KeyCode::PageUp => p.off = p.off.saturating_sub(10),
-                KeyCode::PageDown | KeyCode::Char(' ') => p.off = (p.off + 10).min(h.saturating_sub(1)),
+                KeyCode::PageDown | KeyCode::Char(' ') => {
+                    p.off = (p.off + 10).min(h.saturating_sub(1))
+                }
                 _ => {}
             }
             return;
@@ -1583,25 +1868,62 @@ impl App {
 
     pub fn modelpicker(&mut self) {
         let cur = MID_ALL.get(self.model).map(|x| x.0).unwrap_or("");
-        let items: Vec<(String, String, String)> = self.models.iter().map(|(v, d, ds, _)| (d.clone(), one_line(ds, 60), v.clone())).collect();
-        let sel = self.models.iter().position(|m| m.0 == cur || m.0.starts_with(cur) || cur.starts_with(&m.0)).unwrap_or(0);
-        self.pk = Some(Pk { kind: 0, title: "model".into(), items, sel, ..Default::default() });
+        let items: Vec<(String, String, String)> = self
+            .models
+            .iter()
+            .map(|(v, d, ds, _)| (d.clone(), one_line(ds, 60), v.clone()))
+            .collect();
+        let sel = self
+            .models
+            .iter()
+            .position(|m| m.0 == cur || m.0.starts_with(cur) || cur.starts_with(&m.0))
+            .unwrap_or(0);
+        self.pk = Some(Pk {
+            kind: 0,
+            title: "model".into(),
+            items,
+            sel,
+            ..Default::default()
+        });
     }
 
     pub fn effortpicker(&mut self) {
         let cur = MID_ALL.get(self.model).map(|x| x.0).unwrap_or("");
-        let lv: Vec<String> = self.models.iter().find(|m| m.0 == cur).map(|m| m.3.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| EFF.iter().map(|x| x.to_string()).collect());
+        let lv: Vec<String> = self
+            .models
+            .iter()
+            .find(|m| m.0 == cur)
+            .map(|m| m.3.clone())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| EFF.iter().map(|x| x.to_string()).collect());
         let sel = lv.iter().position(|x| *x == self.effs).unwrap_or(0);
-        let items = lv.iter().map(|x| (x.clone(), String::new(), x.clone())).collect();
-        self.pk = Some(Pk { kind: 1, title: "effort".into(), items, sel, ..Default::default() });
+        let items = lv
+            .iter()
+            .map(|x| (x.clone(), String::new(), x.clone()))
+            .collect();
+        self.pk = Some(Pk {
+            kind: 1,
+            title: "effort".into(),
+            items,
+            sel,
+            ..Default::default()
+        });
     }
 
     pub fn attach(&mut self, b: Vec<u8>) -> bool {
         match img::shrink(b) {
             Ok((b, m)) => {
                 self.imgs.push((m, b));
-                let pre = self.inp.chars().nth(self.cur.wrapping_sub(1)).is_some_and(|c| !c.is_whitespace());
-                let t = format!("{}[image #{}] ", if pre { " " } else { "" }, self.imgs.len());
+                let pre = self
+                    .inp
+                    .chars()
+                    .nth(self.cur.wrapping_sub(1))
+                    .is_some_and(|c| !c.is_whitespace());
+                let t = format!(
+                    "{}[image #{}] ",
+                    if pre { " " } else { "" },
+                    self.imgs.len()
+                );
                 self.put(&t);
                 true
             }
@@ -1647,9 +1969,21 @@ impl App {
         let c = s.chars().count();
         if n > 4 || c > 800 {
             self.pst.push(s);
-            let pre = self.inp.chars().nth(self.cur.wrapping_sub(1)).is_some_and(|c| !c.is_whitespace());
-            let d = if n > 1 { format!("+{n} lines") } else { format!("{c} chars") };
-            let t = format!("{}[pasted #{} {d}] ", if pre { " " } else { "" }, self.pst.len());
+            let pre = self
+                .inp
+                .chars()
+                .nth(self.cur.wrapping_sub(1))
+                .is_some_and(|c| !c.is_whitespace());
+            let d = if n > 1 {
+                format!("+{n} lines")
+            } else {
+                format!("{c} chars")
+            };
+            let t = format!(
+                "{}[pasted #{} {d}] ",
+                if pre { " " } else { "" },
+                self.pst.len()
+            );
             self.put(&t);
             return;
         }
@@ -1750,17 +2084,33 @@ impl App {
         if seen.is_empty() {
             return None;
         }
-        Some(seen.into_iter().map(|k| (self.imgs[k - 1].0, self.imgs[k - 1].1.as_slice())).collect())
+        Some(
+            seen.into_iter()
+                .map(|k| (self.imgs[k - 1].0, self.imgs[k - 1].1.as_slice()))
+                .collect(),
+        )
     }
 
     pub fn rhits(&self) -> Vec<(String, String, String)> {
-        let Some((v, _)) = &self.rs else { return vec![] };
+        let Some((v, _)) = &self.rs else {
+            return vec![];
+        };
         let q = self.rq.to_lowercase();
-        v.iter().filter(|x| q.is_empty() || x.1.to_lowercase().contains(&q) || x.2.to_lowercase().contains(&q)).cloned().collect()
+        v.iter()
+            .filter(|x| {
+                q.is_empty() || x.1.to_lowercase().contains(&q) || x.2.to_lowercase().contains(&q)
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn users(&self) -> Vec<usize> {
-        self.bs.iter().enumerate().filter(|(_, b)| matches!(b, B::U(..))).map(|(i, _)| i).collect()
+        self.bs
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| matches!(b, B::U(..)))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     fn rwkey(&mut self, k: KeyEvent) {
@@ -1770,11 +2120,15 @@ impl App {
             (KeyCode::Esc, Some(_)) => self.rw = Some((sel, None)),
             (KeyCode::Esc, None) => self.rw = None,
             (KeyCode::Up, None) => self.rw = Some((sel.saturating_sub(1), None)),
-            (KeyCode::Down, None) => self.rw = Some(((sel + 1).min(us.len().saturating_sub(1)), None)),
+            (KeyCode::Down, None) => {
+                self.rw = Some(((sel + 1).min(us.len().saturating_sub(1)), None))
+            }
             (KeyCode::Enter, None) => self.rw = Some((sel, Some(0))),
             (KeyCode::Left, Some(o)) => self.rw = Some((sel, Some(o.saturating_sub(1)))),
             (KeyCode::Right | KeyCode::Tab, Some(o)) => self.rw = Some((sel, Some((o + 1).min(2)))),
-            (KeyCode::Char(c @ '1'..='3'), Some(_)) => self.rw = Some((sel, Some(c as usize - '1' as usize))),
+            (KeyCode::Char(c @ '1'..='3'), Some(_)) => {
+                self.rw = Some((sel, Some(c as usize - '1' as usize)))
+            }
             (KeyCode::Enter, Some(o)) => {
                 self.rw = None;
                 if let Some(&i) = us.get(sel) {
@@ -1827,7 +2181,11 @@ impl App {
     }
 
     fn undo(&mut self, re: bool) {
-        let (f, t) = if re { (&mut self.red, &mut self.und) } else { (&mut self.und, &mut self.red) };
+        let (f, t) = if re {
+            (&mut self.red, &mut self.und)
+        } else {
+            (&mut self.und, &mut self.red)
+        };
         if let Some((s, c)) = f.pop() {
             t.push((std::mem::take(&mut self.inp), self.cur));
             self.inp = s;
@@ -1851,7 +2209,9 @@ impl App {
             _ => return false,
         };
         let t: String = cs[a..b].iter().collect();
-        let Some((k, _)) = ptok(&t).filter(|x| x.0 >= 1 && x.0 <= self.pst.len()) else { return false };
+        let Some((k, _)) = ptok(&t).filter(|x| x.0 >= 1 && x.0 <= self.pst.len()) else {
+            return false;
+        };
         let x = self.pst[k - 1].clone();
         let n = x.chars().count();
         self.inp = cs[..a].iter().collect::<String>() + &x + &cs[b..].iter().collect::<String>();
@@ -1875,9 +2235,37 @@ impl App {
     }
 
     fn copylast(&mut self, code: bool) {
-        let lu = self.bs.iter().rposition(|b| matches!(b, B::U(..))).map(|i| i + 1).unwrap_or(0);
-        let t: Vec<&str> = self.bs[lu..].iter().filter_map(|b| if let B::T(x) = b { Some(x.as_str()) } else { None }).collect();
-        let t = if t.is_empty() { self.bs.iter().rev().find_map(|b| if let B::T(x) = b { Some(x.clone()) } else { None }).unwrap_or_default() } else { t.join("\n\n") };
+        let lu = self
+            .bs
+            .iter()
+            .rposition(|b| matches!(b, B::U(..)))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let t: Vec<&str> = self.bs[lu..]
+            .iter()
+            .filter_map(|b| {
+                if let B::T(x) = b {
+                    Some(x.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let t = if t.is_empty() {
+            self.bs
+                .iter()
+                .rev()
+                .find_map(|b| {
+                    if let B::T(x) = b {
+                        Some(x.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default()
+        } else {
+            t.join("\n\n")
+        };
         let x = if code {
             let mut bl: Vec<String> = vec![];
             let mut cur: Option<String> = None;
@@ -1899,7 +2287,11 @@ impl App {
             t.trim().to_string()
         };
         if x.is_empty() {
-            self.toast(if code { "no code block" } else { "nothing to copy" });
+            self.toast(if code {
+                "no code block"
+            } else {
+                "nothing to copy"
+            });
             return;
         }
         copy(&x);
@@ -1907,7 +2299,9 @@ impl App {
     }
 
     pub fn fhits(&self) -> Vec<(usize, usize, usize)> {
-        let Some((q, _)) = &self.fs else { return vec![] };
+        let Some((q, _)) = &self.fs else {
+            return vec![];
+        };
         let q: Vec<char> = q.chars().flat_map(char::to_lowercase).collect();
         if q.is_empty() {
             return vec![];
@@ -1915,12 +2309,18 @@ impl App {
         let mut o = vec![];
         for (i, l) in self.btx.borrow().iter().enumerate() {
             let cs: Vec<char> = l.chars().collect();
-            let lc: Vec<char> = cs.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+            let lc: Vec<char> = cs
+                .iter()
+                .map(|c| c.to_lowercase().next().unwrap_or(*c))
+                .collect();
             let mut j = 0;
             while j + q.len() <= lc.len() {
                 if lc[j..j + q.len()] == q[..] {
                     let x: usize = cs[..j].iter().map(|c| c.width().unwrap_or(0)).sum();
-                    let w: usize = cs[j..j + q.len()].iter().map(|c| c.width().unwrap_or(0)).sum();
+                    let w: usize = cs[j..j + q.len()]
+                        .iter()
+                        .map(|c| c.width().unwrap_or(0))
+                        .sum();
                     o.push((i, x, w));
                     j += q.len();
                 } else {
@@ -1936,7 +2336,11 @@ impl App {
         if nb <= bh {
             return;
         }
-        let s0 = if top { i.saturating_sub(1) } else { i.saturating_sub(bh / 2) };
+        let s0 = if top {
+            i.saturating_sub(1)
+        } else {
+            i.saturating_sub(bh / 2)
+        };
         self.scr = (nb - bh).saturating_sub(s0).min(self.smax.get());
     }
 
@@ -1985,8 +2389,19 @@ impl App {
             return;
         }
         let s0 = (nb - bh).saturating_sub(self.scr.min(self.smax.get())) + 1;
-        let ps: Vec<usize> = self.btx.borrow().iter().enumerate().filter(|(_, l)| l.starts_with("> ")).map(|(i, _)| i).collect();
-        let t = if up { ps.iter().rev().find(|&&p| p < s0).copied() } else { ps.iter().find(|&&p| p > s0).copied() };
+        let ps: Vec<usize> = self
+            .btx
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with("> "))
+            .map(|(i, _)| i)
+            .collect();
+        let t = if up {
+            ps.iter().rev().find(|&&p| p < s0).copied()
+        } else {
+            ps.iter().find(|&&p| p > s0).copied()
+        };
         match t {
             Some(p) => self.showline(p, true),
             None if up => self.scr = self.smax.get(),
@@ -2013,7 +2428,16 @@ impl App {
             return;
         }
         self.cc = self.t.max(1);
-        let menu = self.fs.is_some() || self.rw.is_some() || self.qa.is_some() || self.pk.is_some() || self.tk.is_some() || self.ns.is_some() || self.pp.is_some() || self.tp.is_some() || self.bp.is_some() || self.rs.is_some();
+        let menu = self.fs.is_some()
+            || self.rw.is_some()
+            || self.qa.is_some()
+            || self.pk.is_some()
+            || self.tk.is_some()
+            || self.ns.is_some()
+            || self.pp.is_some()
+            || self.tp.is_some()
+            || self.bp.is_some()
+            || self.rs.is_some();
         if !menu {
             if self.busy {
                 self.stop()
@@ -2062,10 +2486,10 @@ impl App {
                     self.tkp = self.t;
                     self.tpoll(sel);
                 }
-                KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
-                    if self.tasks[sel].st == 0 {
-                        self.tstop(sel);
-                    }
+                KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace
+                    if self.tasks[sel].st == 0 =>
+                {
+                    self.tstop(sel);
                 }
                 _ => {}
             }
@@ -2118,20 +2542,29 @@ impl App {
                     14 => {
                         let on = !rclick();
                         setrclick(on);
-                        self.toast(format!("right-click paste  {}", if on { "on" } else { "off" }));
+                        self.toast(format!(
+                            "right-click paste  {}",
+                            if on { "on" } else { "off" }
+                        ));
                     }
                     15 => self.setopac(true),
                     16 => {
                         let on = !free::enabled();
                         free::set_enabled(on);
                         self.frat = None;
-                        self.toast(format!("free token count  {}", if on { "on" } else { "off" }));
+                        self.toast(format!(
+                            "free token count  {}",
+                            if on { "on" } else { "off" }
+                        ));
                     }
                     17 => {
                         let on = !free::claude_enabled();
                         free::set_claude_enabled(on);
                         self.clat = None;
-                        self.toast(format!("claude token count  {}", if on { "on" } else { "off" }));
+                        self.toast(format!(
+                            "claude token count  {}",
+                            if on { "on" } else { "off" }
+                        ));
                     }
                     _ => self.upcheck(true),
                 },
@@ -2160,7 +2593,11 @@ impl App {
                     self.tp = None;
                 }
                 KeyCode::Up | KeyCode::Down => {
-                    let j = if k.code == KeyCode::Up { sel.saturating_sub(1) } else { (sel + 1).min(n - 1) };
+                    let j = if k.code == KeyCode::Up {
+                        sel.saturating_sub(1)
+                    } else {
+                        (sel + 1).min(n - 1)
+                    };
                     self.tp = Some((j, prev));
                     pal::set(j);
                 }
@@ -2181,7 +2618,11 @@ impl App {
                     self.bp = None;
                 }
                 KeyCode::Up | KeyCode::Down => {
-                    let n = if k.code == KeyCode::Up { sel.saturating_sub(1) } else { (sel + 1).min(v.len() - 1) };
+                    let n = if k.code == KeyCode::Up {
+                        sel.saturating_sub(1)
+                    } else {
+                        (sel + 1).min(v.len() - 1)
+                    };
                     self.bp = Some((n, prev));
                     self.bgw = pv(n);
                 }
@@ -2251,9 +2692,20 @@ impl App {
                     self.submit()
                 }
             }
-            KeyCode::Char(c) if !ct && self.ask.is_some() && self.inp.is_empty() && matches!(c, 'y' | 'n' | 'a') => self.answer(c),
+            KeyCode::Char(c)
+                if !ct
+                    && self.ask.is_some()
+                    && self.inp.is_empty()
+                    && matches!(c, 'y' | 'n' | 'a') =>
+            {
+                self.answer(c)
+            }
             KeyCode::Char('o') if ct && self.unfold() => {}
-            KeyCode::Char('z' | 'Z') if ct && (k.modifiers.contains(Km::SHIFT) || k.code == KeyCode::Char('Z')) => self.undo(true),
+            KeyCode::Char('z' | 'Z')
+                if ct && (k.modifiers.contains(Km::SHIFT) || k.code == KeyCode::Char('Z')) =>
+            {
+                self.undo(true)
+            }
             KeyCode::Char('z') if ct => self.undo(false),
             KeyCode::Char('y') if ct => self.undo(true),
             KeyCode::Char('o') if ct => {
@@ -2271,7 +2723,9 @@ impl App {
             KeyCode::Char('v') if ct => self.clipv(),
             KeyCode::Char('g') if ct => self.edit = true,
             KeyCode::Char('b') if ct => self.tbg(),
-            KeyCode::Down if self.inp.is_empty() && self.hi.is_none() && !self.tasks.is_empty() => self.tk = Some((self.tasks.len() - 1, false)),
+            KeyCode::Down if self.inp.is_empty() && self.hi.is_none() && !self.tasks.is_empty() => {
+                self.tk = Some((self.tasks.len() - 1, false))
+            }
             KeyCode::Backspace if k.modifiers.intersects(Km::CONTROL | Km::ALT) => {
                 let j = self.wl();
                 self.cut(j, self.cur)
@@ -2342,8 +2796,20 @@ impl App {
             KeyCode::Right if self.tokr().is_some() => self.cur = self.tokr().unwrap_or(self.cur),
             KeyCode::Left => self.cur = self.cur.saturating_sub(1),
             KeyCode::Right => self.cur = (self.cur + 1).min(self.nch()),
-            KeyCode::Home => self.cur = self.vline().map(|x| x.0).filter(|&a| a != self.cur).unwrap_or(0),
-            KeyCode::End => self.cur = self.vline().map(|x| x.1).filter(|&e| e != self.cur).unwrap_or(self.nch()),
+            KeyCode::Home => {
+                self.cur = self
+                    .vline()
+                    .map(|x| x.0)
+                    .filter(|&a| a != self.cur)
+                    .unwrap_or(0)
+            }
+            KeyCode::End => {
+                self.cur = self
+                    .vline()
+                    .map(|x| x.1)
+                    .filter(|&e| e != self.cur)
+                    .unwrap_or(self.nch())
+            }
             KeyCode::Up if self.vmove(true) => {}
             KeyCode::Down if self.vmove(false) => {}
             KeyCode::Up => {
@@ -2380,12 +2846,24 @@ impl App {
     }
 
     pub fn tedits(&self) -> usize {
-        let lu = self.bs.iter().rposition(|b| matches!(b, B::U(..))).unwrap_or(0);
-        self.bs[lu..].iter().filter(|b| matches!(b, B::Tl(t) if t.k == Tk::Edit && t.st == St::Ok)).count()
+        let lu = self
+            .bs
+            .iter()
+            .rposition(|b| matches!(b, B::U(..)))
+            .unwrap_or(0);
+        self.bs[lu..]
+            .iter()
+            .filter(|b| matches!(b, B::Tl(t) if t.k == Tk::Edit && t.st == St::Ok))
+            .count()
     }
 
     pub fn tools(&self) -> Vec<usize> {
-        self.bs.iter().enumerate().filter(|(_, b)| matches!(b, B::Tl(_))).map(|(i, _)| i).collect()
+        self.bs
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| matches!(b, B::Tl(_)))
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 
@@ -2394,7 +2872,11 @@ impl App {
 /// an ASCII letter or digit (those are real Ctrl+Alt shortcuts) is typed text: drop Ctrl and Alt.
 pub fn altgr(mut k: KeyEvent) -> KeyEvent {
     if let KeyCode::Char(c) = k.code {
-        if k.modifiers.contains(Km::CONTROL | Km::ALT) && !c.is_control() && !c.is_whitespace() && !c.is_ascii_alphanumeric() {
+        if k.modifiers.contains(Km::CONTROL | Km::ALT)
+            && !c.is_control()
+            && !c.is_whitespace()
+            && !c.is_ascii_alphanumeric()
+        {
             k.modifiers.remove(Km::CONTROL | Km::ALT);
         }
     }
@@ -2403,7 +2885,11 @@ pub fn altgr(mut k: KeyEvent) -> KeyEvent {
 
 fn one_line(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("").trim();
-    if l.chars().count() > n { l.chars().take(n - 1).collect::<String>() + "…" } else { l.to_string() }
+    if l.chars().count() > n {
+        l.chars().take(n - 1).collect::<String>() + "…"
+    } else {
+        l.to_string()
+    }
 }
 
 pub fn localfiles(q: &str) -> Vec<String> {
@@ -2411,14 +2897,24 @@ pub fn localfiles(q: &str) -> Vec<String> {
     let mut all = vec![];
     let mut st = vec![root.clone()];
     while let Some(d) = st.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             let n = e.file_name().to_string_lossy().to_string();
-            if n.starts_with('.') || matches!(n.as_str(), "target" | "node_modules" | "dist" | "build" | "__pycache__") {
+            if n.starts_with('.')
+                || matches!(
+                    n.as_str(),
+                    "target" | "node_modules" | "dist" | "build" | "__pycache__"
+                )
+            {
                 continue;
             }
-            let rel = p.strip_prefix(&root).map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+            let rel = p
+                .strip_prefix(&root)
+                .map(|x| x.to_string_lossy().to_string())
+                .unwrap_or_default();
             if p.is_dir() {
                 all.push(format!("{rel}/"));
                 if all.len() < 20000 {
@@ -2441,8 +2937,19 @@ pub fn localfiles(q: &str) -> Vec<String> {
             if !ql.chars().all(|c| it.any(|x| x == c)) {
                 return None;
             }
-            let base = pl.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
-            let sc = if base.starts_with(&ql) { 0 } else if pl.contains(&ql) { 1000 } else { 3000 } + p.len() as i64;
+            let base = pl
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let sc = if base.starts_with(&ql) {
+                0
+            } else if pl.contains(&ql) {
+                1000
+            } else {
+                3000
+            } + p.len() as i64;
             Some((sc, p))
         })
         .collect();
@@ -2458,7 +2965,13 @@ pub fn difflines(d: Option<&serde_json::Value>, path: &str) -> Vec<(char, String
             continue;
         }
         for h in f["hunks"].as_array().cloned().unwrap_or_default() {
-            o.push(('@', format!("@@ -{},{} +{},{} @@", h["oldStart"], h["oldLines"], h["newStart"], h["newLines"])));
+            o.push((
+                '@',
+                format!(
+                    "@@ -{},{} +{},{} @@",
+                    h["oldStart"], h["oldLines"], h["newStart"], h["newLines"]
+                ),
+            ));
             for l in h["lines"].as_array().cloned().unwrap_or_default() {
                 let l = l.as_str().unwrap_or("").to_string();
                 let c = l.chars().next().unwrap_or(' ');
@@ -2487,7 +3000,10 @@ pub fn ptok(s: &str) -> Option<(usize, usize)> {
     if d.is_empty() {
         return None;
     }
-    let e = r[d.len()..].chars().take(32).position(|c| c == ']' || c == '[' || c == '\n')?;
+    let e = r[d.len()..]
+        .chars()
+        .take(32)
+        .position(|c| c == ']' || c == '[' || c == '\n')?;
     if r[d.len()..].chars().nth(e) != Some(']') {
         return None;
     }
@@ -2520,7 +3036,7 @@ pub fn imgspans(s: &str, base: Style, hi: Style) -> Vec<Span<'static>> {
             v.push(Span::styled(rest[..b].to_string(), hi));
             rest = &rest[b..];
         } else {
-            let c = rest.chars().next().unwrap();
+            let Some(c) = rest.chars().next() else { break };
             cur.push(c);
             rest = &rest[c.len_utf8()..];
         }
@@ -2546,11 +3062,12 @@ fn words(s: &str) -> Vec<String> {
     let mut sp = None;
     for c in s.chars() {
         let isp = c == ' ';
-        if sp == Some(isp) {
-            v.last_mut().unwrap().push(c);
-        } else {
-            v.push(c.to_string());
-            sp = Some(isp);
+        match v.last_mut() {
+            Some(last) if sp == Some(isp) => last.push(c),
+            _ => {
+                v.push(c.to_string());
+                sp = Some(isp);
+            }
         }
     }
     v
@@ -2634,7 +3151,15 @@ fn inl(s: &str, base: Style, m: &Md) -> Vec<(String, Style)> {
     let (mut code, mut bold) = (false, false);
     let cs: Vec<char> = s.chars().collect();
     let mut i = 0;
-    let sty = |c: bool, b: bool| if c { m.c } else if b { m.b } else { base };
+    let sty = |c: bool, b: bool| {
+        if c {
+            m.c
+        } else if b {
+            m.b
+        } else {
+            base
+        }
+    };
     while i < cs.len() {
         if cs[i] == '`' {
             v.push((std::mem::take(&mut cur), sty(code, bold)));
@@ -2656,7 +3181,10 @@ fn inl(s: &str, base: Style, m: &Md) -> Vec<(String, Style)> {
     v
 }
 
-const KW: [&str; 16] = ["fn", "let", "mut", "pub", "self", "Self", "impl", "struct", "use", "for", "in", "if", "else", "match", "return", "as"];
+const KW: [&str; 16] = [
+    "fn", "let", "mut", "pub", "self", "Self", "impl", "struct", "use", "for", "in", "if", "else",
+    "match", "return", "as",
+];
 
 pub fn hl(s: &str, m: &Md) -> Vec<Span<'static>> {
     let mut v = vec![];
@@ -2695,7 +3223,10 @@ pub fn hl(s: &str, m: &Md) -> Vec<Span<'static>> {
             w.push(c);
             continue;
         }
-        if c.is_alphanumeric() || c == '_' || (c == '.' && w.chars().next().is_some_and(|x| x.is_ascii_digit())) {
+        if c.is_alphanumeric()
+            || c == '_'
+            || (c == '.' && w.chars().next().is_some_and(|x| x.is_ascii_digit()))
+        {
             w.push(c);
         } else {
             flush(&mut w, &mut v);
@@ -2742,15 +3273,52 @@ fn tcols(nat: &[usize], av: usize) -> Vec<usize> {
 }
 
 fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
-    let issep = |r: &str| r.trim().chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) && r.contains('-');
-    let al: Vec<bool> = rows.iter().find(|r| issep(r)).map(|r| r.trim().trim_matches('|').split('|').map(|x| { let x = x.trim(); x.ends_with(':') && !x.starts_with(':') }).collect()).unwrap_or_default();
+    let issep =
+        |r: &str| r.trim().chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) && r.contains('-');
+    let al: Vec<bool> = rows
+        .iter()
+        .find(|r| issep(r))
+        .map(|r| {
+            r.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(|x| {
+                    let x = x.trim();
+                    x.ends_with(':') && !x.starts_with(':')
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let rows: Vec<&str> = rows.iter().copied().filter(|r| !issep(r)).collect();
     let rows = &rows[..];
     let rs: Vec<Vec<Vec<(String, Style)>>> = rows
         .iter()
-        .map(|r| r.trim().trim_matches('|').split('|').map(|x| x.trim()).collect::<Vec<_>>())
+        .map(|r| {
+            r.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(|x| x.trim())
+                .collect::<Vec<_>>()
+        })
         .enumerate()
-        .map(|(i, cs)| cs.iter().enumerate().map(|(j, c)| inl(c, if i == 0 { m.b } else if j == 0 { m.t } else { m.fps }, m)).collect())
+        .map(|(i, cs)| {
+            cs.iter()
+                .enumerate()
+                .map(|(j, c)| {
+                    inl(
+                        c,
+                        if i == 0 {
+                            m.b
+                        } else if j == 0 {
+                            m.t
+                        } else {
+                            m.fps
+                        },
+                        m,
+                    )
+                })
+                .collect()
+        })
         .collect();
     let n = rs.iter().map(|r| r.len()).max().unwrap_or(0);
     if n == 0 {
@@ -2758,10 +3326,21 @@ fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
     }
     let sep = 3;
     let cwid = |c: &Vec<(String, Style)>| c.iter().map(|x| x.0.width()).sum::<usize>();
-    let nat: Vec<usize> = (0..n).map(|j| rs.iter().filter_map(|r| r.get(j)).map(cwid).max().unwrap_or(0)).collect();
+    let nat: Vec<usize> = (0..n)
+        .map(|j| {
+            rs.iter()
+                .filter_map(|r| r.get(j))
+                .map(cwid)
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
     let av = w.saturating_sub(sep * (n - 1));
     if av < n * 6 {
-        let hd: Vec<String> = rs[0].iter().map(|c| c.iter().map(|x| x.0.clone()).collect()).collect();
+        let hd: Vec<String> = rs[0]
+            .iter()
+            .map(|c| c.iter().map(|x| x.0.clone()).collect())
+            .collect();
         for r in rs.iter().skip(1) {
             for (j, c) in r.iter().enumerate() {
                 let mut sg = vec![];
@@ -2769,9 +3348,23 @@ fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
                     sg.push((format!("{h}: "), m.b));
                 }
                 sg.extend(c.iter().cloned());
-                let pre = if j == 0 { m.bul.to_string() } else { " ".repeat(m.bul.width()) };
-                for (k, l) in wsegs(&sg, w.saturating_sub(pre.width())).into_iter().enumerate() {
-                    let mut v = vec![Span::styled(if k == 0 { pre.clone() } else { " ".repeat(pre.width()) }, m.bs)];
+                let pre = if j == 0 {
+                    m.bul.to_string()
+                } else {
+                    " ".repeat(m.bul.width())
+                };
+                for (k, l) in wsegs(&sg, w.saturating_sub(pre.width()))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut v = vec![Span::styled(
+                        if k == 0 {
+                            pre.clone()
+                        } else {
+                            " ".repeat(pre.width())
+                        },
+                        m.bs,
+                    )];
                     v.extend(l);
                     o.push(Line::from(v));
                 }
@@ -2781,7 +3374,9 @@ fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
     }
     let cw = tcols(&nat, av);
     for (i, r) in rs.iter().enumerate() {
-        let cells: Vec<Vec<Vec<Span<'static>>>> = (0..n).map(|j| r.get(j).map(|c| wsegs(c, cw[j])).unwrap_or_default()).collect();
+        let cells: Vec<Vec<Vec<Span<'static>>>> = (0..n)
+            .map(|j| r.get(j).map(|c| wsegs(c, cw[j])).unwrap_or_default())
+            .collect();
         let h = cells.iter().map(|c| c.len()).max().unwrap_or(1).max(1);
         for k in 0..h {
             let mut sp = vec![];
@@ -2844,8 +3439,14 @@ pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
         };
         let pw = pre.width();
         let ind = " ".repeat(pw);
-        for (i, l) in wsegs(&inl(body, m.t, m), w.saturating_sub(pw)).into_iter().enumerate() {
-            let mut v = vec![Span::styled(if i == 0 { pre.clone() } else { ind.clone() }, m.bs)];
+        for (i, l) in wsegs(&inl(body, m.t, m), w.saturating_sub(pw))
+            .into_iter()
+            .enumerate()
+        {
+            let mut v = vec![Span::styled(
+                if i == 0 { pre.clone() } else { ind.clone() },
+                m.bs,
+            )];
             v.extend(l);
             o.push(Line::from(v));
         }
@@ -2856,12 +3457,18 @@ pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
     let mut r: Vec<Line<'static>> = vec![];
     for l in o {
         let e = l.spans.iter().all(|x| x.content.trim().is_empty());
-        if e && r.last().is_none_or(|p: &Line| p.spans.iter().all(|x| x.content.trim().is_empty())) {
+        if e && r
+            .last()
+            .is_none_or(|p: &Line| p.spans.iter().all(|x| x.content.trim().is_empty()))
+        {
             continue;
         }
         r.push(l);
     }
-    while r.last().is_some_and(|l| l.spans.iter().all(|x| x.content.trim().is_empty())) {
+    while r
+        .last()
+        .is_some_and(|l| l.spans.iter().all(|x| x.content.trim().is_empty()))
+    {
         r.pop();
     }
     r
@@ -2924,7 +3531,7 @@ pub fn inlay(s: &str, w: usize) -> (Vec<usize>, Vec<usize>) {
             continue;
         }
         if col + x > w {
-            let s0 = *st.last().unwrap();
+            let s0 = st.last().copied().unwrap_or(0);
             let b = brk.filter(|&b| b > s0 && b <= i).unwrap_or(i);
             en.push(b);
             st.push(b);
@@ -2941,10 +3548,23 @@ pub fn inwrap(s: &str, cur: usize, w: usize) -> (Vec<String>, (usize, usize)) {
     let w = w.max(2);
     let cs: Vec<char> = s.chars().collect();
     let (st, en) = inlay(s, w);
-    let mut ls: Vec<String> = st.iter().zip(&en).map(|(&a, &b)| cs[a..b].iter().collect::<String>().trim_end_matches(' ').to_string()).collect();
+    let mut ls: Vec<String> = st
+        .iter()
+        .zip(&en)
+        .map(|(&a, &b)| {
+            cs[a..b]
+                .iter()
+                .collect::<String>()
+                .trim_end_matches(' ')
+                .to_string()
+        })
+        .collect();
     let cur = cur.min(cs.len());
     let mut cy = st.iter().rposition(|&a| a <= cur).unwrap_or(0);
-    let mut cx: usize = cs[st[cy]..cur].iter().map(|&c| c.width().unwrap_or(0)).sum();
+    let mut cx: usize = cs[st[cy]..cur]
+        .iter()
+        .map(|&c| c.width().unwrap_or(0))
+        .sum();
     if cx >= w {
         if cur == cs.len() {
             ls.push(String::new());
@@ -3007,7 +3627,10 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let _ = write!(out, "\x1b[22;0t");
-    let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    let _ = execute!(
+        out,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |p| {
@@ -3073,10 +3696,19 @@ impl std::hash::Hasher for Fx {
 
 fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io::Result<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let oc = args.iter().any(|x| x == "--opencode") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "opencode");
-    let ag = !oc && (args.iter().any(|x| x == "--agy" || x == "--antigravity") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "agy" || x == "antigravity"));
-    let cx = oc || ag || args.iter().any(|x| x == "--codex") || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
-    let args: Vec<String> = args.into_iter().filter(|x| x != "--codex" && x != "--opencode" && x != "--agy" && x != "--antigravity").collect();
+    let oc = args.iter().any(|x| x == "--opencode")
+        || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "opencode");
+    let ag = !oc
+        && (args.iter().any(|x| x == "--agy" || x == "--antigravity")
+            || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "agy" || x == "antigravity"));
+    let cx = oc
+        || ag
+        || args.iter().any(|x| x == "--codex")
+        || std::env::var("NONAME_ENGINE").is_ok_and(|x| x == "codex");
+    let args: Vec<String> = args
+        .into_iter()
+        .filter(|x| x != "--codex" && x != "--opencode" && x != "--agy" && x != "--antigravity")
+        .collect();
     let mut a = if std::env::var("NONAME_MOCK").is_ok() {
         App::new()
     } else if oc {
@@ -3096,7 +3728,11 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     sys::on_close(bye);
     sys::catch_ctrlc(true);
     upd::cleanup();
-    if std::env::var("NONAME_MOCK").is_err() && upd::managed().is_none() && upd::enabled() && upd::due() {
+    if std::env::var("NONAME_MOCK").is_err()
+        && upd::managed().is_none()
+        && upd::enabled()
+        && upd::due()
+    {
         a.upcheck(false);
     }
     while !a.quit {
@@ -3121,7 +3757,11 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             sk += 1;
         } else {
             sk = 0;
-            let _ = ratatui::crossterm::queue!(io::stdout(), ratatui::crossterm::terminal::BeginSynchronizedUpdate, ratatui::crossterm::cursor::Hide);
+            let _ = ratatui::crossterm::queue!(
+                io::stdout(),
+                ratatui::crossterm::terminal::BeginSynchronizedUpdate,
+                ratatui::crossterm::cursor::Hide
+            );
             if let Some(p) = &shot {
                 let k = if p.contains("{}") { 3 } else { 15 };
                 if a.t % k == 0 {
@@ -3140,7 +3780,10 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
             pv = Some(hs);
             term.swap_buffers();
             ratatui::backend::Backend::flush(term.backend_mut())?;
-            let _ = execute!(io::stdout(), ratatui::crossterm::terminal::EndSynchronizedUpdate);
+            let _ = execute!(
+                io::stdout(),
+                ratatui::crossterm::terminal::EndSynchronizedUpdate
+            );
         }
         if pb && !a.busy {
             a.dn = true;
@@ -3179,11 +3822,25 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                         a.key(k)
                     }
                 }
-                Event::Paste(s) if a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => a.paste(s),
+                Event::Paste(s)
+                    if a.rw.is_none()
+                        && a.ns.is_none()
+                        && a.pp.is_none()
+                        && a.tp.is_none()
+                        && a.bp.is_none() =>
+                {
+                    a.paste(s)
+                }
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
                         let (x, y) = (m.column, m.row);
-                        let n = if a.lc.0.elapsed() < Duration::from_millis(400) && (a.lc.1, a.lc.2) == (x, y) { a.lc.3 % 3 + 1 } else { 1 };
+                        let n = if a.lc.0.elapsed() < Duration::from_millis(400)
+                            && (a.lc.1, a.lc.2) == (x, y)
+                        {
+                            a.lc.3 % 3 + 1
+                        } else {
+                            1
+                        };
                         a.lc = (Instant::now(), x, y, n);
                         a.msel = None;
                         a.csel = None;
@@ -3226,7 +3883,18 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                                     let n = t.chars().count();
                                     let sys = copy(&t);
                                     a.clip = t;
-                                    a.toast(if sys { format!("copied {n} chars") } else { format!("copied {n} chars · no wl-copy/xclip{}", if rclick() { ", right-click pastes here" } else { "" }) });
+                                    a.toast(if sys {
+                                        format!("copied {n} chars")
+                                    } else {
+                                        format!(
+                                            "copied {n} chars · no wl-copy/xclip{}",
+                                            if rclick() {
+                                                ", right-click pastes here"
+                                            } else {
+                                                ""
+                                            }
+                                        )
+                                    });
                                 }
                             }
                         } else {
@@ -3236,7 +3904,12 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                                     a.click(m.column, m.row);
                                 }
                                 Some(s) => {
-                                    let t = a.txt.borrow().as_ref().map(|b| seltext(b, s)).unwrap_or_default();
+                                    let t = a
+                                        .txt
+                                        .borrow()
+                                        .as_ref()
+                                        .map(|b| seltext(b, s))
+                                        .unwrap_or_default();
                                     if t.trim().is_empty() {
                                         a.msel = None;
                                     } else {
@@ -3249,15 +3922,37 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
                         }
                     }
                     // alt + wheel: up more solid, down more see-through (ctrl + wheel is the terminal's zoom)
-                    MouseEventKind::ScrollUp if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(false, false),
-                    MouseEventKind::ScrollDown if m.modifiers.contains(ratatui::crossterm::event::KeyModifiers::ALT) => a.opacstep(true, false),
-                    MouseEventKind::Down(MouseButton::Right) if rclick() && a.rw.is_none() && a.ns.is_none() && a.pp.is_none() && a.tp.is_none() && a.bp.is_none() => {
+                    MouseEventKind::ScrollUp
+                        if m.modifiers
+                            .contains(ratatui::crossterm::event::KeyModifiers::ALT) =>
+                    {
+                        a.opacstep(false, false)
+                    }
+                    MouseEventKind::ScrollDown
+                        if m.modifiers
+                            .contains(ratatui::crossterm::event::KeyModifiers::ALT) =>
+                    {
+                        a.opacstep(true, false)
+                    }
+                    MouseEventKind::Down(MouseButton::Right)
+                        if rclick()
+                            && a.rw.is_none()
+                            && a.ns.is_none()
+                            && a.pp.is_none()
+                            && a.tp.is_none()
+                            && a.bp.is_none() =>
+                    {
                         a.msel = None;
                         // same as ctrl+v (images and copied files attach), with noname's own copy
                         // as fallback when there is no clipboard tool
                         a.clipv_any();
                     }
-                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if { let (y, h, _) = a.ig.get(); h > 1 && m.row >= y && m.row < y + h } => {
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        if {
+                            let (y, h, _) = a.ig.get();
+                            h > 1 && m.row >= y && m.row < y + h
+                        } =>
+                    {
                         let up = m.kind == MouseEventKind::ScrollUp;
                         a.vmove(up);
                     }
@@ -3315,7 +4010,11 @@ fn lp<T: V>(term: &mut Terminal<CrosstermBackend<io::Stdout>>, v: &mut T) -> io:
     // second ctrl+c or mouse movement in that time does not land in a half-restored screen
     sys::catch_ctrlc(false);
     let _ = restore();
-    Ok(if std::env::var("NONAME_MOCK").is_ok() { String::new() } else { a.session_id() })
+    Ok(if std::env::var("NONAME_MOCK").is_ok() {
+        String::new()
+    } else {
+        a.session_id()
+    })
 }
 
 /// Session id for the exit message, also when noname is ended by a signal.
@@ -3342,7 +4041,11 @@ fn selnorm(s: (u16, u16, u16, u16)) -> ((u16, u16), (u16, u16)) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>, t: Option<&ratatui::buffer::Buffer>) {
+fn selhl(
+    b: &mut ratatui::buffer::Buffer,
+    s: Option<(u16, u16, u16, u16)>,
+    t: Option<&ratatui::buffer::Buffer>,
+) {
     let Some(s) = s else { return };
     if (s.0, s.1) == (s.2, s.3) {
         return;
@@ -3351,7 +4054,11 @@ fn selhl(b: &mut ratatui::buffer::Buffer, s: Option<(u16, u16, u16, u16)>, t: Op
     let ar = b.area;
     for y in y0..=y1.min(ar.height.saturating_sub(1)) {
         let xa = if y == y0 { x0 } else { 0 };
-        let xb = if y == y1 { x1 } else { ar.width.saturating_sub(1) };
+        let xb = if y == y1 {
+            x1
+        } else {
+            ar.width.saturating_sub(1)
+        };
         for x in xa..=xb.min(ar.width.saturating_sub(1)) {
             let c = &mut b[(x, y)];
             if let Some(t) = t.filter(|t| t.area == ar) {
@@ -3368,7 +4075,11 @@ fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
     let mut ls: Vec<String> = vec![];
     for y in y0..=y1.min(ar.height.saturating_sub(1)) {
         let xa = if y == y0 { x0 } else { 0 };
-        let xb = if y == y1 { x1 } else { ar.width.saturating_sub(1) };
+        let xb = if y == y1 {
+            x1
+        } else {
+            ar.width.saturating_sub(1)
+        };
         let mut l = String::new();
         let mut skip = 0;
         for x in 0..=xb.min(ar.width.saturating_sub(1)) {
@@ -3388,8 +4099,24 @@ fn seltext(b: &ratatui::buffer::Buffer, s: (u16, u16, u16, u16)) -> String {
 }
 
 fn tidy(ls: Vec<String>) -> String {
-    let ind = ls.iter().skip(1).filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
-    let mut o: Vec<String> = ls.iter().enumerate().map(|(i, l)| if i == 0 { l.trim_start().to_string() } else { l.get(ind.min(l.len())..).unwrap_or("").to_string() }).collect();
+    let ind = ls
+        .iter()
+        .skip(1)
+        .filter(|l| !l.is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let mut o: Vec<String> = ls
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            if i == 0 {
+                l.trim_start().to_string()
+            } else {
+                l.get(ind.min(l.len())..).unwrap_or("").to_string()
+            }
+        })
+        .collect();
     while o.last().is_some_and(|l| l.is_empty()) {
         o.pop();
     }
@@ -3403,7 +4130,9 @@ fn copy(t: &str) -> bool {
 }
 
 fn cur_label(q: &Option<Qa>, j: usize) -> String {
-    q.as_ref().map(|q| q.qs[q.i].opts[j].0.clone()).unwrap_or_default()
+    q.as_ref()
+        .map(|q| q.qs[q.i].opts[j].0.clone())
+        .unwrap_or_default()
 }
 
 pub const BARS: [&str; 3] = ["context bar", "5h bar", "week bar"];
@@ -3415,7 +4144,9 @@ pub fn bars() -> [bool; 3] {
     let mut m = BSET.load(Relaxed);
     if m == u8::MAX {
         let hid = std::fs::read_to_string(sys::cfgfile("bars")).unwrap_or_default();
-        m = (0..3).filter(|&i| !hid.split([',', '\n', ' ']).any(|x| x.trim() == BKEY[i])).fold(0, |a, i| a | 1 << i);
+        m = (0..3)
+            .filter(|&i| !hid.split([',', '\n', ' ']).any(|x| x.trim() == BKEY[i]))
+            .fold(0, |a, i| a | 1 << i);
         BSET.store(m, Relaxed);
     }
     [m & 1 != 0, m & 2 != 0, m & 4 != 0]
@@ -3424,7 +4155,10 @@ pub fn bars() -> [bool; 3] {
 pub fn setbar(i: usize, on: bool) {
     let mut b = bars();
     b[i] = on;
-    BSET.store((0..3).filter(|&j| b[j]).fold(0, |a, j| a | 1 << j), std::sync::atomic::Ordering::Relaxed);
+    BSET.store(
+        (0..3).filter(|&j| b[j]).fold(0, |a, j| a | 1 << j),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let hid: Vec<&str> = (0..3).filter(|&j| !b[j]).map(|j| BKEY[j]).collect();
     let f = sys::cfgfile("bars");
     if let Some(d) = std::path::Path::new(&f).parent() {
@@ -3435,16 +4169,51 @@ pub fn setbar(i: usize, on: bool) {
 
 pub const LAYOUT: [(&str, &[&str]); 6] = [
     ("input", &["bottom", "top"]),
-    ("usage", &["bottom left", "bottom right", "top left", "top right", "off"]),
+    (
+        "usage",
+        &[
+            "bottom left",
+            "bottom right",
+            "top left",
+            "top right",
+            "off",
+        ],
+    ),
     ("model", &["top", "bottom", "off"]),
-    ("title", &["middle", "top left", "top center", "top right", "bottom right"]),
+    (
+        "title",
+        &[
+            "middle",
+            "top left",
+            "top center",
+            "top right",
+            "bottom right",
+        ],
+    ),
     ("title visibility", &["on start", "always", "off"]),
-    ("location", &["top left", "top center", "top right", "bottom left", "bottom center", "bottom right", "off"]),
+    (
+        "location",
+        &[
+            "top left",
+            "top center",
+            "top right",
+            "bottom left",
+            "bottom center",
+            "bottom right",
+            "off",
+        ],
+    ),
 ];
-static LSET: [std::sync::atomic::AtomicU8; 6] = [const { std::sync::atomic::AtomicU8::new(u8::MAX) }; 6];
+static LSET: [std::sync::atomic::AtomicU8; 6] =
+    [const { std::sync::atomic::AtomicU8::new(u8::MAX) }; 6];
 
 fn layload() -> Vec<(String, String)> {
-    std::fs::read_to_string(sys::cfgfile("layout")).unwrap_or_default().lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect()
+    std::fs::read_to_string(sys::cfgfile("layout"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect()
 }
 
 pub fn lay(i: usize) -> usize {
@@ -3454,14 +4223,20 @@ pub fn lay(i: usize) -> usize {
         return m as usize;
     }
     let (k, opts) = LAYOUT[i];
-    let v = layload().into_iter().find(|x| x.0 == k).and_then(|x| opts.iter().position(|o| *o == x.1)).unwrap_or(0);
+    let v = layload()
+        .into_iter()
+        .find(|x| x.0 == k)
+        .and_then(|x| opts.iter().position(|o| *o == x.1))
+        .unwrap_or(0);
     LSET[i].store(v as u8, Relaxed);
     v
 }
 
 pub fn setlay(i: usize, v: usize) {
     LSET[i].store(v as u8, std::sync::atomic::Ordering::Relaxed);
-    let body: String = (0..LAYOUT.len()).map(|j| format!("{}={}\n", LAYOUT[j].0, LAYOUT[j].1[lay(j)])).collect();
+    let body: String = (0..LAYOUT.len())
+        .map(|j| format!("{}={}\n", LAYOUT[j].0, LAYOUT[j].1[lay(j)]))
+        .collect();
     let f = sys::cfgfile("layout");
     if let Some(d) = std::path::Path::new(&f).parent() {
         let _ = std::fs::create_dir_all(d);
@@ -3489,7 +4264,10 @@ pub fn rclick() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
     let mut m = RCLICK.load(Relaxed);
     if m == u8::MAX {
-        m = (std::fs::read_to_string(sys::cfgfile("rclick")).unwrap_or_default().trim() == "on") as u8;
+        m = (std::fs::read_to_string(sys::cfgfile("rclick"))
+            .unwrap_or_default()
+            .trim()
+            == "on") as u8;
         RCLICK.store(m, Relaxed);
     }
     m == 1
@@ -3525,7 +4303,9 @@ pub fn setdefeff(e: Option<&str>) {
 }
 
 pub fn defmode() -> Option<usize> {
-    std::fs::read_to_string(modefile()).ok().and_then(|x| modeidx(&x))
+    std::fs::read_to_string(modefile())
+        .ok()
+        .and_then(|x| modeidx(&x))
 }
 
 pub fn bgfile() -> String {
@@ -3533,18 +4313,44 @@ pub fn bgfile() -> String {
 }
 
 fn ttl(a: &App) -> String {
-    let d = if a.stitle.is_empty() { a.cwd.rsplit('/').next().unwrap_or("").to_string() } else { a.stitle.clone() };
-    let st = if a.ask.is_some() || a.qa.is_some() { "? " } else if a.busy { "● " } else if a.dn { "✓ " } else { "" };
+    let d = if a.stitle.is_empty() {
+        a.cwd.rsplit('/').next().unwrap_or("").to_string()
+    } else {
+        a.stitle.clone()
+    };
+    let st = if a.ask.is_some() || a.qa.is_some() {
+        "? "
+    } else if a.busy {
+        "● "
+    } else if a.dn {
+        "✓ "
+    } else {
+        ""
+    };
     format!("{st}noname · {d}")
 }
 
 fn editor(s: &str) -> Option<String> {
     let f = std::env::temp_dir().join(format!("noname-prompt-{}.md", std::process::id()));
     std::fs::write(&f, s).ok()?;
-    let ed = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_else(|_| if cfg!(windows) { "notepad".into() } else if sys::which("nano").is_some() { "nano".into() } else { "vi".into() });
+    let ed = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "notepad".into()
+            } else if sys::which("nano").is_some() {
+                "nano".into()
+            } else {
+                "vi".into()
+            }
+        });
     let _ = restore();
     let mut v = ed.split_whitespace();
-    let ok = std::process::Command::new(v.next().unwrap_or("vi")).args(v).arg(&f).status().is_ok_and(|x| x.success());
+    let ok = std::process::Command::new(v.next().unwrap_or("vi"))
+        .args(v)
+        .arg(&f)
+        .status()
+        .is_ok_and(|x| x.success());
     // a Ctrl+C pressed in the editor belongs to the editor, not to noname
     let _ = sys::ctrlc();
     let _ = enable_raw_mode();
@@ -3552,10 +4358,17 @@ fn editor(s: &str) -> Option<String> {
     let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
     // push the title again too: restore() popped it, and pops it once more on exit
     let _ = write!(out, "\x1b[22;0t");
-    let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    let _ = execute!(
+        out,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     let _ = execute!(out, ratatui::crossterm::event::EnableBracketedPaste);
     TERM_ON.store(true, std::sync::atomic::Ordering::SeqCst);
-    let r = if ok { std::fs::read_to_string(&f).ok() } else { None };
+    let r = if ok {
+        std::fs::read_to_string(&f).ok()
+    } else {
+        None
+    };
     let _ = std::fs::remove_file(&f);
     r
 }
@@ -3577,7 +4390,11 @@ mod ctrlc_tests {
         a.t = 100;
         cc(&mut a);
         assert!(!a.quit);
-        assert!(a.toast.as_ref().is_some_and(|t| t.0.contains("again to exit")));
+        assert!(
+            a.toast
+                .as_ref()
+                .is_some_and(|t| t.0.contains("again to exit"))
+        );
         a.t += CC_WIN;
         cc(&mut a);
         assert!(a.quit);
@@ -3639,7 +4456,12 @@ fn restore() -> io::Result<()> {
     let _ = execute!(o, ratatui::crossterm::event::DisableBracketedPaste);
     let _ = write!(o, "\x1b[23;0t");
     disable_raw_mode()?;
-    execute!(o, LeaveAlternateScreen, DisableMouseCapture, ratatui::crossterm::cursor::Show)?;
+    execute!(
+        o,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        ratatui::crossterm::cursor::Show
+    )?;
     Ok(())
 }
 
@@ -3692,7 +4514,10 @@ fn setup<T: V>(v: &mut T, a: &mut App, s: &str) {
             a.submit();
             for _ in 0..3000 {
                 a.step();
-                if a.bs.iter().any(|b| matches!(b, B::Tl(t) if t.st == St::Err)) {
+                if a.bs
+                    .iter()
+                    .any(|b| matches!(b, B::Tl(t) if t.st == St::Err))
+                {
                     break;
                 }
             }
@@ -3717,7 +4542,12 @@ fn setup<T: V>(v: &mut T, a: &mut App, s: &str) {
         "paste" => {
             a.inp = "look at this log ".into();
             a.cur = a.inp.chars().count();
-            a.paste((0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"));
+            a.paste(
+                (0..40)
+                    .map(|i| format!("line {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
             a.put("and fix it\nalso\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine words that go on and on until the line wraps around nicely");
         }
         "done" => {
@@ -3756,7 +4586,18 @@ fn css(c: &ratatui::buffer::Cell) -> String {
     let mut s = String::new();
     let m = c.modifier;
     let (fg, bg) = if m.contains(Modifier::REVERSED) {
-        (if c.bg == Color::Reset { pal::BASE() } else { c.bg }, if c.fg == Color::Reset { pal::FG() } else { c.fg })
+        (
+            if c.bg == Color::Reset {
+                pal::BASE()
+            } else {
+                c.bg
+            },
+            if c.fg == Color::Reset {
+                pal::FG()
+            } else {
+                c.fg
+            },
+        )
     } else {
         (c.fg, c.bg)
     };
@@ -3785,16 +4626,27 @@ fn css(c: &ratatui::buffer::Cell) -> String {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn html(b: &Buffer, cur: Option<(u16, u16)>) -> String {
     let a = b.area;
     let pb = std::env::var("NONAME_SHOT_BG").ok();
-    let mut s = String::from("<!doctype html><html><head><meta charset=utf-8><style>body{margin:0;background:#0d0a14}#bg{position:relative;display:inline-block;padding:14px 18px;background:radial-gradient(circle at 20% 30%,#5a3d8a 0,transparent 45%),radial-gradient(circle at 80% 70%,#2a4a7a 0,transparent 50%),linear-gradient(135deg,#2b1f45,#1b2440 50%,#3a2040)}#bg:before{content:'';position:absolute;inset:0;background:rgba(26,20,38,.7)}#t{position:relative;font:15px/19px 'CaskaydiaCove Nerd Font Mono',monospace;white-space:pre;color:#e9defa}.k{background:#b497ff;color:#1a1426}</style></head><body><div id=bg><div id=t>");
-    s += &format!("<style>.k{{background:{};color:{}}}#t{{color:{}}}</style>", hex(pal::LI()).unwrap_or_default(), hex(pal::BASE()).unwrap_or_default(), hex(pal::FG()).unwrap_or_default());
+    let mut s = String::from(
+        "<!doctype html><html><head><meta charset=utf-8><style>body{margin:0;background:#0d0a14}#bg{position:relative;display:inline-block;padding:14px 18px;background:radial-gradient(circle at 20% 30%,#5a3d8a 0,transparent 45%),radial-gradient(circle at 80% 70%,#2a4a7a 0,transparent 50%),linear-gradient(135deg,#2b1f45,#1b2440 50%,#3a2040)}#bg:before{content:'';position:absolute;inset:0;background:rgba(26,20,38,.7)}#t{position:relative;font:15px/19px 'CaskaydiaCove Nerd Font Mono',monospace;white-space:pre;color:#e9defa}.k{background:#b497ff;color:#1a1426}</style></head><body><div id=bg><div id=t>",
+    );
+    s += &format!(
+        "<style>.k{{background:{};color:{}}}#t{{color:{}}}</style>",
+        hex(pal::LI()).unwrap_or_default(),
+        hex(pal::BASE()).unwrap_or_default(),
+        hex(pal::FG()).unwrap_or_default()
+    );
     if let Some(c) = &pb {
-        s += &format!("<style>body,#bg{{background:{c} !important}}#bg:before{{display:none}}</style>");
+        s += &format!(
+            "<style>body,#bg{{background:{c} !important}}#bg:before{{display:none}}</style>"
+        );
     }
     for y in 0..a.height {
         let mut x = 0;
@@ -3836,7 +4688,12 @@ fn dump<T: V + Clone>(v0: &mut T, args: &[String]) -> io::Result<()> {
     let dir = args.first().cloned().unwrap_or_else(|| ".".into());
     let name = args.get(1).cloned().unwrap_or_else(|| "v".into());
     let sizes: Vec<(u16, u16)> = vec![(270, 50), (104, 32)];
-    let mut sc: Vec<String> = ["idle", "empty", "run", "ask", "btw", "open", "type", "todo", "done"].iter().map(|s| s.to_string()).collect();
+    let mut sc: Vec<String> = [
+        "idle", "empty", "run", "ask", "btw", "open", "type", "todo", "done",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     sc.extend(args.iter().skip(2).cloned());
     for (w, h) in sizes {
         for s in &sc {
@@ -3844,9 +4701,11 @@ fn dump<T: V + Clone>(v0: &mut T, args: &[String]) -> io::Result<()> {
             let mut vv = v0.clone();
             let v = &mut vv;
             setup(v, &mut a, s);
-            let mut term = Terminal::new(TestBackend::new(w, h)).expect("the test backend cannot fail");
+            let mut term =
+                Terminal::new(TestBackend::new(w, h)).expect("the test backend cannot fail");
             a.cp.set(None);
-            term.draw(|f| v.draw(f, &a)).expect("the test backend cannot fail");
+            term.draw(|f| v.draw(f, &a))
+                .expect("the test backend cannot fail");
             let b = term.backend().buffer().clone();
             let mut txt = String::new();
             for y in 0..h {
@@ -3866,7 +4725,11 @@ fn dump<T: V + Clone>(v0: &mut T, args: &[String]) -> io::Result<()> {
 const NZ: &[u8] = b"0123456789abcdefABCDEF$%@#";
 
 pub fn rcfmt(secs: f32, tok: u64, usd: f64, dw: f32) -> String {
-    let t = if tok >= 1000 { format!("{:.1}k", tok as f64 / 1000.0) } else { tok.to_string() };
+    let t = if tok >= 1000 {
+        format!("{:.1}k", tok as f64 / 1000.0)
+    } else {
+        tok.to_string()
+    };
     let mut s = format!("{secs:.1}s  ·  {t} tok  ·  ${usd:.2}");
     if dw >= 0.5 {
         s += &format!("  ·  +{dw:.0}% week");
@@ -3911,10 +4774,24 @@ fn wave(i: usize, t: u64) -> f32 {
 }
 
 pub fn noise(n: usize, t: u64, seed: u64, cs: &[Color]) -> Vec<Span<'static>> {
-    (0..n).map(|i| Span::styled(nz(t, seed * 131 + i as u64).to_string(), Style::new().fg(grad(cs, wave(i, t))))).collect()
+    (0..n)
+        .map(|i| {
+            Span::styled(
+                nz(t, seed * 131 + i as u64).to_string(),
+                Style::new().fg(grad(cs, wave(i, t))),
+            )
+        })
+        .collect()
 }
 
-pub fn decode(s: &str, el: u64, t: u64, seed: u64, done: Style, cs: &[Color]) -> Vec<Span<'static>> {
+pub fn decode(
+    s: &str,
+    el: u64,
+    t: u64,
+    seed: u64,
+    done: Style,
+    cs: &[Color],
+) -> Vec<Span<'static>> {
     let mut v: Vec<Span<'static>> = vec![];
     let mut run = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -3925,7 +4802,10 @@ pub fn decode(s: &str, el: u64, t: u64, seed: u64, done: Style, cs: &[Color]) ->
         if !run.is_empty() {
             v.push(Span::styled(std::mem::take(&mut run), done));
         }
-        v.push(Span::styled(nz(t, seed * 131 + i as u64).to_string(), Style::new().fg(grad(cs, wave(i, t)))));
+        v.push(Span::styled(
+            nz(t, seed * 131 + i as u64).to_string(),
+            Style::new().fg(grad(cs, wave(i, t))),
+        ));
     }
     if !run.is_empty() {
         v.push(Span::styled(run, done));
@@ -3945,16 +4825,32 @@ mod key_tests {
     fn altgr_letters_are_typed() {
         // Polish AltGr letters as crossterm reports them on Windows: Ctrl+Alt (+Shift for capitals)
         let mut a = App::new();
-        for (c, m) in [('ą', Km::CONTROL | Km::ALT), ('ż', Km::CONTROL | Km::ALT), ('Ł', Km::CONTROL | Km::ALT | Km::SHIFT), ('@', Km::CONTROL | Km::ALT), ('€', Km::CONTROL | Km::ALT)] {
+        for (c, m) in [
+            ('ą', Km::CONTROL | Km::ALT),
+            ('ż', Km::CONTROL | Km::ALT),
+            ('Ł', Km::CONTROL | Km::ALT | Km::SHIFT),
+            ('@', Km::CONTROL | Km::ALT),
+            ('€', Km::CONTROL | Km::ALT),
+        ] {
             a.key(altgr(ev(c, m)));
         }
         assert_eq!(a.inp, "ążŁ@€");
-        assert_eq!(altgr(ev('Ł', Km::CONTROL | Km::ALT | Km::SHIFT)).modifiers, Km::SHIFT);
+        assert_eq!(
+            altgr(ev('Ł', Km::CONTROL | Km::ALT | Km::SHIFT)).modifiers,
+            Km::SHIFT
+        );
     }
 
     #[test]
     fn real_shortcuts_stay_shortcuts() {
-        for k in [ev('a', Km::CONTROL | Km::ALT), ev('7', Km::CONTROL | Km::ALT), ev(' ', Km::CONTROL | Km::ALT), ev('c', Km::CONTROL), ev('ą', Km::CONTROL), ev('b', Km::ALT)] {
+        for k in [
+            ev('a', Km::CONTROL | Km::ALT),
+            ev('7', Km::CONTROL | Km::ALT),
+            ev(' ', Km::CONTROL | Km::ALT),
+            ev('c', Km::CONTROL),
+            ev('ą', Km::CONTROL),
+            ev('b', Km::ALT),
+        ] {
             assert_eq!(altgr(k), k);
         }
         let mut a = App::new();

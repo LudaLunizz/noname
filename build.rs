@@ -1,7 +1,13 @@
 use std::process::Command;
 
 fn git(a: &[&str]) -> String {
-    Command::new("git").args(a).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+    Command::new("git")
+        .args(a)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 fn main() {
@@ -9,9 +15,15 @@ fn main() {
     let dirty = !git(&["status", "--porcelain", "--untracked-files=no"]).is_empty();
     let date = git(&["log", "-1", "--format=%cs"]);
     println!("cargo:rustc-env=NONAME_REV={rev}");
-    println!("cargo:rustc-env=NONAME_DIRTY={}", if dirty { "1" } else { "" });
+    println!(
+        "cargo:rustc-env=NONAME_DIRTY={}",
+        if dirty { "1" } else { "" }
+    );
     println!("cargo:rustc-env=NONAME_DATE={date}");
-    println!("cargo:rustc-env=NONAME_TARGET={}", std::env::var("TARGET").unwrap_or_default());
+    println!(
+        "cargo:rustc-env=NONAME_TARGET={}",
+        std::env::var("TARGET").unwrap_or_default()
+    );
     println!("cargo:rerun-if-env-changed=NONAME_CHANNEL");
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");

@@ -12,6 +12,13 @@ categories = ["command-line-utilities"]
 rust-version = "1.85"
 exclude = ["assets/*", "packaging/*", ".github/*"]
 
+[lints.rust]
+unreachable_pub = "warn"
+
+[lints.clippy]
+mem_forget = "deny"
+unwrap_used = "warn"
+
 [dependencies]
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color"] }
 unicode-width = "0.2"
