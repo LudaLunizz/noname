@@ -1394,8 +1394,8 @@ impl V for V1 {
             vec![Span::styled("5h ", st(FA())), Span::styled(h1, st(CY())), Span::styled(h2, st(FA())), Span::styled(if tg[1] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[1]) }, st(FG()))],
             vec![Span::styled("week ", st(FA())), Span::styled(d1, st(CY())), Span::styled(d2, st(FA())), Span::styled(if tg[2] < 0.0 { " –".to_string() } else { format!(" {:.0}%", db[2]) }, st(FG()))],
         ];
-        // opencode sends no usage numbers, so its empty bars are left out instead of showing dashes
-        let oc = a.is_opencode();
+        // opencode and agy send no usage numbers, so its empty bars are left out instead of showing dashes
+        let oc = a.is_opencode() || a.is_agy();
         let vis = bars();
         let shown: Vec<Vec<Span<'static>>> = segs.into_iter().enumerate().filter(|(j, _)| vis[*j] && !(oc && tg[*j] < 0.0)).map(|(_, x)| x).collect();
         let toast = match &a.toast {

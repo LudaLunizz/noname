@@ -8,6 +8,13 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Eng {
+    Codex,
+    Opencode,
+    Agy,
+}
+
 pub struct Cx {
     pub(crate) tid: Option<String>,
     pub(crate) ch: Option<Child>,
@@ -16,8 +23,11 @@ pub struct Cx {
     pub(crate) im: HashMap<String, usize>,
     pub(crate) last: bool,
     pub(crate) t0: u64,
-    pub(crate) oc: bool,
+    pub(crate) eng: Eng,
     pub(crate) tok: u64,
+    /// stderr of the current run (agy only) and whether its result event came
+    pub(crate) err: String,
+    pub(crate) fin: bool,
 }
 
 impl Drop for Cx {
@@ -93,14 +103,14 @@ impl App {
         a.effs = String::new();
         a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
         a.mode = crate::defmode().unwrap_or(0);
-        a.cx = Some(Cx { tid, ch: None, rx: None, args: rest, im: HashMap::new(), last, t0: 0, oc: false, tok: 0 });
+        a.cx = Some(Cx { tid, ch: None, rx: None, args: rest, im: HashMap::new(), last, t0: 0, eng: Eng::Codex, tok: 0, err: String::new(), fin: false });
         Ok(a)
     }
 
     pub fn opencode(args: Vec<String>) -> io::Result<App> {
         let mut a = App::codex(args)?;
         if let Some(c) = &mut a.cx {
-            c.oc = true;
+            c.eng = Eng::Opencode;
         }
         if !a.cx.as_ref().is_some_and(|c| c.args.iter().any(|x| x == "-m")) {
             a.mname = crate::opencode::cfg_model();
@@ -108,12 +118,36 @@ impl App {
         Ok(a)
     }
 
+    /// Antigravity CLI (`agy`) as the engine: one `agy -p` per message.
+    pub fn agy(args: Vec<String>) -> io::Result<App> {
+        let mut a = App::codex(args)?;
+        if let Some(c) = &mut a.cx {
+            c.eng = Eng::Agy;
+        }
+        if !a.cx.as_ref().is_some_and(|c| c.args.iter().any(|x| x == "-m")) {
+            a.mname = crate::agy::cfg_model();
+        }
+        Ok(a)
+    }
+
+    fn kind(&self) -> Eng {
+        self.cx.as_ref().map_or(Eng::Codex, |c| c.eng)
+    }
+
     pub fn is_opencode(&self) -> bool {
-        self.cx.as_ref().is_some_and(|c| c.oc)
+        self.kind() == Eng::Opencode
+    }
+
+    pub fn is_agy(&self) -> bool {
+        self.kind() == Eng::Agy
     }
 
     pub(crate) fn eng(&self) -> &'static str {
-        if self.cx.as_ref().is_some_and(|c| c.oc) { "opencode" } else { "codex" }
+        match self.kind() {
+            Eng::Opencode => "opencode",
+            Eng::Agy => "agy",
+            Eng::Codex => "codex",
+        }
     }
 
     pub fn is_codex(&self) -> bool {
@@ -135,7 +169,11 @@ impl App {
         let nm = self.eng();
         let Some(c) = &mut self.cx else { return };
         c.tok = 0;
-        let mut cmd = if c.oc {
+        c.err.clear();
+        c.fin = false;
+        let mut cmd = if c.eng == Eng::Agy {
+            crate::agy::build(c, mode, &imgs, t, &x)
+        } else if c.eng == Eng::Opencode {
             crate::opencode::build(c, mode, &imgs, t, &x)
         } else {
             let mut cmd = Command::new(crate::sys::bin("codex"));
@@ -175,7 +213,8 @@ impl App {
             cmd.arg(&x);
             cmd
         };
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let agy = c.eng == Eng::Agy;
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(if agy { Stdio::piped() } else { Stdio::null() });
         live::guard_pub(&mut cmd);
         let Ok(mut ch) = cmd.spawn() else {
             self.busy = false;
@@ -185,14 +224,37 @@ impl App {
         live::track_pid(ch.id() as i32);
         let out = ch.stdout.take().unwrap();
         let (tx, rx) = channel();
+        // agy reports sign-in problems and denied permissions on stderr only
+        let eh = ch.stderr.take().map(|er| {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                for l in BufReader::new(er).lines() {
+                    let Ok(l) = l else { break };
+                    if tx.send(json!({"event": "_stderr", "text": l})).is_err() {
+                        break;
+                    }
+                }
+            })
+        });
+        // NONAME_ENGINE_LOG=FILE keeps every raw event line, for bug reports about an engine
+        let log = std::env::var("NONAME_ENGINE_LOG").ok().filter(|x| !x.is_empty());
         thread::spawn(move || {
+            let mut lf = log.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
             for l in BufReader::new(out).lines() {
                 let Ok(l) = l else { break };
+                if let Some(f) = &mut lf {
+                    use std::io::Write;
+                    let _ = writeln!(f, "{l}");
+                }
                 if let Ok(v) = serde_json::from_str::<Value>(&l) {
                     if tx.send(v).is_err() {
                         break;
                     }
                 }
+            }
+            // the last stderr lines must arrive before the end marker
+            if let Some(h) = eh {
+                let _ = h.join();
             }
             let _ = tx.send(json!({"type": "_eof"}));
         });
@@ -244,8 +306,12 @@ impl App {
                 self.toast("next message resumes that session");
             }
             "quit" | "exit" => self.quit = true,
-            // opencode knows its own commands and skills (/researcher, /deep-research, ...): let it run them
-            _ if self.is_opencode() && crate::opencode::split_cmd(&format!("/{r}")).is_some() => self.csubmit(format!("/{r}")),
+            // agy answers its own TUI commands itself, which a one-shot print run cannot do
+            _ if self.is_agy() && matches!(c, "model" | "effort" | "usage" | "quota" | "config" | "settings" | "logout" | "help" | "mcp" | "permissions" | "plan" | "agents" | "skills" | "hooks") => {
+                self.toast(format!("/{c} is an agy menu command: start noname with --model, --effort or --agent instead"))
+            }
+            // opencode and agy know their own commands and skills (/researcher, /deep-research, ...): let them run them
+            _ if (self.is_opencode() || self.is_agy()) && crate::opencode::split_cmd(&format!("/{r}")).is_some() => self.csubmit(format!("/{r}")),
             _ => self.toast(format!("/{c} is not available with {}", self.eng())),
         }
     }
@@ -255,12 +321,12 @@ impl App {
             Some(r) => r.try_iter().collect(),
             None => return,
         };
-        let oc = self.eng() == "opencode";
+        let k = self.kind();
         for e in evs {
-            if oc {
-                self.ocev(e);
-            } else {
-                self.cev(e);
+            match k {
+                Eng::Opencode => self.ocev(e),
+                Eng::Agy => self.agev(e),
+                Eng::Codex => self.cev(e),
             }
         }
     }
