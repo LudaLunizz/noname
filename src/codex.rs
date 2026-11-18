@@ -106,6 +106,11 @@ fn cfg_model() -> String {
 }
 
 impl App {
+    /// Builds an `App` that uses Codex as the engine (one `codex exec` per message). `args` holds the command-line flags (`-c`, `-r`, `-m`) and the arguments passed through to `codex`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current folder cannot be read.
     pub fn codex(args: Vec<String>) -> io::Result<App> {
         let mut a = App::new();
         a.bs.clear();
@@ -172,6 +177,11 @@ impl App {
         Ok(a)
     }
 
+    /// Like `App::codex`, but the engine is the `opencode` CLI. The model name comes from the OpenCode config unless `-m` is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current folder cannot be read.
     pub fn opencode(args: Vec<String>) -> io::Result<App> {
         let mut a = App::codex(args)?;
         if let Some(c) = &mut a.cx {
@@ -188,6 +198,10 @@ impl App {
     }
 
     /// Antigravity CLI (`agy`) as the engine: one `agy -p` per message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current folder cannot be read.
     pub fn agy(args: Vec<String>) -> io::Result<App> {
         let mut a = App::codex(args)?;
         if let Some(c) = &mut a.cx {
@@ -207,10 +221,12 @@ impl App {
         self.cx.as_ref().map_or(Eng::Codex, |c| c.eng)
     }
 
+    /// Whether this session uses the OpenCode engine.
     pub fn is_opencode(&self) -> bool {
         self.kind() == Eng::Opencode
     }
 
+    /// Whether this session uses the `agy` engine.
     pub fn is_agy(&self) -> bool {
         self.kind() == Eng::Agy
     }
@@ -223,6 +239,7 @@ impl App {
         }
     }
 
+    /// Whether one of the one-shot engines (Codex, OpenCode or `agy`) is in use instead of the default Claude engine.
     pub fn is_codex(&self) -> bool {
         self.cx.is_some()
     }

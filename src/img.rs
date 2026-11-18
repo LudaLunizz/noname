@@ -4,12 +4,18 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Largest image size in bytes that is attached as it is; bigger images go through `shrink`.
 pub const MAX: usize = 3_750_000;
 
+/// What was found on the clipboard.
 pub enum Clip {
+    /// Image data (PNG, JPEG, GIF or WebP bytes).
     Img(Vec<u8>),
+    /// Paths of image files.
     Files(Vec<PathBuf>),
+    /// Plain text.
     Text(String),
+    /// Nothing usable, or the clipboard tool failed or hung.
     Empty,
 }
 
@@ -165,6 +171,8 @@ fn isimg(p: &Path) -> bool {
     matches!(e.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") && p.is_file()
 }
 
+/// The image files named by `s`: one path or several, in the forms a terminal pastes them.
+/// Returns an empty list unless every part is an existing image file.
 pub fn paths(s: &str) -> Vec<PathBuf> {
     let s = s.trim();
     if s.is_empty() || s.len() > 8192 {
@@ -248,6 +256,7 @@ fn uris(b: &[u8]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Reads the macOS clipboard (through `osascript`) and returns an image, image files, text or nothing.
 #[cfg(target_os = "macos")]
 pub fn clip() -> Clip {
     let tmp = std::env::temp_dir().join(format!("noname-clip-{}.png", std::process::id()));
@@ -278,6 +287,7 @@ pub fn clip_any() -> Clip {
     return clip();
 }
 
+/// Reads the Windows clipboard and returns an image, image files, text or nothing.
 #[cfg(windows)]
 pub fn clip() -> Clip {
     clip_win(false)
@@ -332,6 +342,7 @@ fn clip_win(txt: bool) -> Clip {
     Clip::Empty
 }
 
+/// Reads the clipboard through `wl-paste` or `xclip` and returns an image, image files, text or nothing.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn clip() -> Clip {
     let wl = std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -412,6 +423,11 @@ fn text(b: Vec<u8>) -> Clip {
     }
 }
 
+/// Makes image bytes small enough to attach: returns them unchanged (with their MIME type) if they fit within `MAX`, else re-encodes them as JPEG with `ffmpeg` at smaller sizes.
+///
+/// # Errors
+///
+/// Returns `Err(0)` when the bytes are not a supported image, or `Err(size)` with the original size in bytes when `ffmpeg` is missing or no version fits.
 pub fn shrink(b: Vec<u8>) -> Result<(Vec<u8>, &'static str), usize> {
     let Some(m) = mime(&b) else { return Err(0) };
     if b.len() <= MAX {

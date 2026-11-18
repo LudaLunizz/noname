@@ -603,6 +603,11 @@ fn rtext(c: &Value) -> String {
 }
 
 impl App {
+    /// Builds an `App` that uses the default engine: a long-lived `claude` process. `args` are passed on to `claude`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current folder cannot be read or when the `claude` program cannot be started.
     pub fn live(args: Vec<String>) -> io::Result<App> {
         let mut a = App::new();
         a.bs.clear();
@@ -698,6 +703,7 @@ impl App {
         Ok(a)
     }
 
+    /// The slash commands for the command menu as (name, description) pairs: those reported by the Claude session when known, else a built-in list, plus noname's own commands.
     pub fn cmds(&self) -> Vec<(String, String)> {
         let mut v = match &self.lv {
             Some(l) if !l.cmds.is_empty() => l.cmds.clone(),
@@ -765,6 +771,7 @@ impl App {
                 .is_some_and(|l| l.cmds.iter().any(|c| c.0 == "apolloclaw:switch"))
     }
 
+    /// Whether the Claude engine is the one in use.
     pub fn is_live(&self) -> bool {
         self.lv.is_some()
     }
@@ -937,6 +944,7 @@ impl App {
         });
     }
 
+    /// Up to 50 older sessions of the current folder, newest first, as (id, title, details) where the details are age, message count and git branch. The current session is left out.
     pub fn sessions(&self) -> Vec<(String, String, String)> {
         let cwd = std::env::current_dir()
             .map(|d| d.to_string_lossy().to_string())

@@ -49,7 +49,9 @@ const NAMES: &[(&str, &str)] = &[
     ("starfield", "stars"),
 ];
 
+/// Backgrounds that noname draws itself, so they need no external program and also work on Windows.
 pub const NATIVE: [&str; 4] = ["stars", "matrix", "rain", "snow"];
+/// Backgrounds offered in the picker: the built-in ones plus the external programs that can run in a pty.
 pub const PICK: [&str; 14] = [
     "stars",
     "matrix",
@@ -67,12 +69,14 @@ pub const PICK: [&str; 14] = [
     "globe",
 ];
 
+/// The names that can be chosen right now: `off` plus every `PICK` entry that is built in or installed.
 pub fn avail() -> Vec<&'static str> {
     let mut v = vec!["off"];
     v.extend(PICK.iter().copied().filter(|k| exists(k)));
     v
 }
 
+/// The `PICK` entries that are not installed on this machine.
 pub fn missing() -> Vec<&'static str> {
     PICK.iter().copied().filter(|k| !exists(k)).collect()
 }
@@ -97,6 +101,8 @@ fn has(b: &str) -> bool {
     which(b).is_some()
 }
 
+/// Install hint for background `k`: the package-manager command for this system, or a `cargo install` line.
+/// On Windows it only says that the built-in backgrounds work.
 pub fn hint(k: &str) -> String {
     if cfg!(windows) {
         return "only the built-in backgrounds work on windows: stars matrix rain snow".into();
@@ -138,17 +144,21 @@ pub fn hint(k: &str) -> String {
     format!("install {k} with your package manager")
 }
 
+/// Finds the executable `b` on the path and in the usual user install folders (see `crate::sys::which`).
 pub fn which(b: &str) -> Option<std::path::PathBuf> {
     crate::sys::which(b)
 }
 
+/// Space-separated names of all backgrounds, shown as the description of the `/background` command.
 pub const LIST: &str = "stars matrix rain snow cava lavat pipes asciiquarium cbonsai unimatrix neo-matrix tty-clock weathr globe";
 
+/// Maps a typed name or alias (any case, for example `cmatrix` or `clock`) to its canonical background name, or `None` if it is unknown.
 pub fn canon(s: &str) -> Option<&'static str> {
     let s = s.trim().to_lowercase();
     NAMES.iter().find(|(a, _)| *a == s).map(|(_, b)| *b)
 }
 
+/// Whether background `k` can be used: it is built in, or (on Unix) its program is installed.
 pub fn exists(k: &str) -> bool {
     NATIVE.contains(&k) || (cfg!(unix) && which(k).is_some())
 }
@@ -188,7 +198,9 @@ struct Dr {
     s: u64,
 }
 
+/// A background animation behind the chat: either a built-in one or an external program running in a pty.
 pub struct Bg {
+    /// Canonical name of the background (one of the `PICK` names).
     pub name: &'static str,
     pr: Option<Pr>,
     ds: Vec<Dr>,
@@ -209,6 +221,11 @@ fn ws(r: u16, c: u16) -> libc::winsize {
 }
 
 impl Bg {
+    /// Starts background `name` for a screen of `rows` by `cols`. Built-in ones start at once; any other spawns its program in a pty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for external backgrounds on Windows (no pty there), or when the pty or the program cannot be started.
     pub fn new(name: &'static str, rows: u16, cols: u16) -> io::Result<Bg> {
         if NATIVE.contains(&name) {
             return Ok(Bg {
@@ -331,6 +348,8 @@ impl Bg {
         }
     }
 
+    /// Draws the background into `b` on the cells the interface left empty; `t` is the tick counter that drives the animation.
+    /// The pty is resized first when the area changed.
     pub fn paint(&mut self, b: &mut Buffer, t: u64) {
         let a = b.area;
         self.resize(a.height, a.width);

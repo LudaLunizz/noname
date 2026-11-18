@@ -7,11 +7,15 @@ use std::sync::mpsc::{Receiver, channel};
 
 use crate::sys;
 
+/// Git commit this build was made from (empty when unknown).
 pub const REV: &str = env!("NONAME_REV");
+/// Whether the working tree had uncommitted changes when this build was made.
 pub const DIRTY: bool = !env!("NONAME_DIRTY").is_empty();
+/// Date of the build's commit, as `YYYY-MM-DD`.
 pub const DATE: &str = env!("NONAME_DATE");
 const URL: &str = env!("CARGO_PKG_REPOSITORY");
 const TARGET: &str = env!("NONAME_TARGET");
+/// Version number from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const CHANNEL: &str = match option_env!("NONAME_CHANNEL") {
     Some(c) => c,
@@ -19,13 +23,19 @@ const CHANNEL: &str = match option_env!("NONAME_CHANNEL") {
 };
 const EVERY: u64 = 6 * 3600;
 
+/// Result of an update check.
 pub enum Up {
+    /// This build is already the newest.
     Current,
+    /// A newer build was installed. Holds its short revision or release tag.
     Ready(String),
+    /// No update was tried. Holds the reason.
     Skip(String),
+    /// The update failed. Holds the reason.
     Fail(String),
 }
 
+/// Name of the package manager that owns this install, or `None` when noname updates itself.
 pub fn managed() -> Option<&'static str> {
     let p = std::env::current_exe()
         .ok()?
@@ -49,6 +59,7 @@ pub fn managed() -> Option<&'static str> {
     }
 }
 
+/// Short version label: the version number for release builds, otherwise the first seven characters of the revision (`dev` if unknown), with `+` added for a dirty tree.
 pub fn short() -> String {
     if CHANNEL != "source" {
         return VERSION.to_string();
@@ -58,6 +69,7 @@ pub fn short() -> String {
     if DIRTY { format!("{r}+") } else { r }
 }
 
+/// Whether automatic updates are on: `NONAME_NO_UPDATE` is not set and the `autoupdate` config file does not say `off`.
 pub fn enabled() -> bool {
     std::env::var("NONAME_NO_UPDATE").is_err()
         && std::fs::read_to_string(sys::cfgfile("autoupdate"))
@@ -65,6 +77,7 @@ pub fn enabled() -> bool {
             .unwrap_or(true)
 }
 
+/// Turns automatic updates on or off and saves the choice in the `autoupdate` config file.
 pub fn set_enabled(on: bool) {
     let f = sys::cfgfile("autoupdate");
     if let Some(d) = Path::new(&f).parent() {
@@ -80,6 +93,7 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether at least six hours have passed since the last update check.
 pub fn due() -> bool {
     let last = std::fs::read_to_string(sys::cfgfile("update-check"))
         .ok()
@@ -129,6 +143,7 @@ fn out(c: &mut Command) -> String {
         .unwrap_or_default()
 }
 
+/// Deletes the old executable left behind by the last update on Windows; does nothing on other systems.
 pub fn cleanup() {
     #[cfg(windows)]
     if let Ok(e) = std::env::current_exe() {
@@ -136,6 +151,7 @@ pub fn cleanup() {
     }
 }
 
+/// Starts an update check on a background thread and returns the receiver for its single `Up` result. `force` lets a source build with uncommitted changes update too.
 pub fn check(force: bool) -> Receiver<Up> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {

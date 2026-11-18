@@ -1,3 +1,5 @@
+//! The `noname` binary: the terminal event loop, rendering and slash-command handling on top of the `noname` library.
+
 use noname::pal::*;
 use noname::*;
 use ratatui::prelude::*;
