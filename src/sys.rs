@@ -4,12 +4,14 @@
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
+/// The home folder from `HOME` or `USERPROFILE`, or an empty string when neither is set.
 pub fn home() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default()
 }
 
+/// noname's config folder: `%APPDATA%\noname` on Windows, otherwise `noname` under `XDG_CONFIG_HOME` or `~/.config`.
 pub fn cfgdir() -> String {
     #[cfg(windows)]
     if let Ok(a) = std::env::var("APPDATA") {
@@ -19,6 +21,7 @@ pub fn cfgdir() -> String {
     format!("{b}/noname")
 }
 
+/// Path of the file `n` inside the config folder, written with the separator of this platform.
 pub fn cfgfile(n: &str) -> String {
     let d = cfgdir();
     if cfg!(windows) {
@@ -28,12 +31,14 @@ pub fn cfgfile(n: &str) -> String {
     }
 }
 
+/// The program `b` as a full path when `which` finds it, otherwise `b` itself so the system searches its own path.
 pub fn bin(b: &str) -> std::ffi::OsString {
     which(b)
         .map(|p| p.into_os_string())
         .unwrap_or_else(|| b.into())
 }
 
+/// Finds the executable `b`: searches `PATH` plus the usual user install folders (cargo, `~/.local/bin`, Homebrew, snap).
 #[cfg(unix)]
 pub fn which(b: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
@@ -67,6 +72,7 @@ pub fn which(b: &str) -> Option<PathBuf> {
         })
 }
 
+/// Finds the program `b`: searches `PATH` plus a few user install folders, trying the `PATHEXT` extensions.
 #[cfg(windows)]
 pub fn which(b: &str) -> Option<PathBuf> {
     let h = home();
@@ -107,6 +113,7 @@ pub fn which(b: &str) -> Option<PathBuf> {
     None
 }
 
+/// Prepares `c` so the child ends when noname does (parent-death signal on Linux) and runs in its own process group.
 #[cfg(unix)]
 pub fn guard(c: &mut Command) -> &mut Command {
     use std::os::unix::process::CommandExt;
@@ -122,15 +129,18 @@ pub fn guard(c: &mut Command) -> &mut Command {
     c.process_group(0)
 }
 
+/// Prepares `c` so the child gets no console window and its own process group.
 #[cfg(windows)]
 pub fn guard(c: &mut Command) -> &mut Command {
     use std::os::windows::process::CommandExt;
     c.creation_flags(0x0800_0000 | 0x0000_0200)
 }
 
+/// Does nothing on Unix; `guard` already puts the child in its own process group.
 #[cfg(unix)]
 pub fn adopt(_: &Child) {}
 
+/// Adds the child to noname's job object so Windows ends it when noname exits.
 #[cfg(windows)]
 pub fn adopt(c: &Child) {
     use std::os::windows::io::AsRawHandle;
@@ -144,6 +154,7 @@ pub fn adopt(c: &Child) {
     }
 }
 
+/// Asks process `id` and its process group to stop (SIGTERM).
 #[cfg(unix)]
 pub fn term(id: i32) {
     // SAFETY: kill(2) has no memory-safety preconditions. A negative pid signals a whole
@@ -154,6 +165,7 @@ pub fn term(id: i32) {
     }
 }
 
+/// Forcibly ends process `id` and its process group (SIGKILL).
 #[cfg(unix)]
 pub fn kill(id: i32) {
     // SAFETY: same as `term`: kill(2) only sends a signal.
@@ -163,11 +175,13 @@ pub fn kill(id: i32) {
     }
 }
 
+/// Ends process `id` and its children; on Windows this is the same as `kill`.
 #[cfg(windows)]
 pub fn term(id: i32) {
     kill(id)
 }
 
+/// Forcibly ends process `id` and its children with `taskkill`.
 #[cfg(windows)]
 pub fn kill(id: i32) {
     use std::os::windows::process::CommandExt;
@@ -180,6 +194,7 @@ pub fn kill(id: i32) {
         .status();
 }
 
+/// Ends the process at once with status 0, without running destructors. It is safe to call from signal-handling threads.
 pub fn exit_now() -> ! {
     #[cfg(unix)]
     // SAFETY: _exit ends the process at once without running destructors or atexit handlers,
@@ -191,6 +206,7 @@ pub fn exit_now() -> ! {
     std::process::exit(0)
 }
 
+/// Installs a handler for SIGHUP, SIGTERM and SIGINT: it runs the cleanup `f`, then exits (after two seconds at most).
 #[cfg(unix)]
 pub fn on_close(f: fn()) {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
@@ -212,6 +228,7 @@ pub fn on_close(f: fn()) {
     }
 }
 
+/// Registers a console control handler that runs the cleanup `f` and then exits. Ctrl+C is only passed to the main loop while that is enabled.
 #[cfg(windows)]
 pub fn on_close(f: fn()) {
     let _ = job();
@@ -295,6 +312,7 @@ mod win {
     };
 }
 
+/// Opens `path` at `line` (may be empty) with the command in `NONAME_OPEN` (`{}` is the path, `{line}` the line) or else the system opener. The opener runs detached.
 pub fn open(path: &str, line: &str) {
     let mut c = if let Ok(t) = std::env::var("NONAME_OPEN") {
         let t = t.replace("{line}", if line.is_empty() { "1" } else { line });
@@ -449,6 +467,7 @@ pub fn open_dir(path: &str) {
     let _ = c.spawn();
 }
 
+/// The current local month, counted from 0 (January) to 11 (December).
 pub fn month() -> i32 {
     #[cfg(unix)]
     // SAFETY: `t` and `tm` are valid for the call; an all-zero libc::tm is a valid value, and
@@ -682,6 +701,7 @@ fn others(want: &str) -> bool {
     })
 }
 
+/// Says what a change of the window opacity affects in this terminal, or an empty string when the terminal is not supported.
 pub fn opacity_scope() -> &'static str {
     match tm() {
         Some(Tm::Px(_)) | Some(Tm::Gt(_)) => "all tabs with this profile",
@@ -696,6 +716,7 @@ pub fn opacity_scope() -> &'static str {
     }
 }
 
+/// Sets the opacity of this terminal to `pct` percent and returns whether that worked. Where needed it saves the old setting first so it can be restored.
 pub fn opacity_apply(pct: u8) -> bool {
     let Some(t) = tm() else { return false };
     let v = pct as f32 / 100.0;
@@ -723,6 +744,7 @@ pub fn opacity_apply(pct: u8) -> bool {
     ok
 }
 
+/// Puts the terminal opacity back to what it was before `opacity_apply`.
 pub fn opacity_restore() {
     let Some(t) = tm() else { return };
     let p = OPON.swap(0, std::sync::atomic::Ordering::SeqCst);
@@ -745,6 +767,7 @@ pub fn opacity_restore() {
     }
 }
 
+/// Restores the opacity, unless another noname running in the same terminal profile still needs the changed value.
 pub fn opacity_back() {
     let sh = match tm() {
         Some(Tm::Px(id)) => others(&format!("PTYXIS_PROFILE={id}")),

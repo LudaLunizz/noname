@@ -13,6 +13,7 @@ rust-version = "1.85"
 exclude = ["assets/*", "packaging/*", ".github/*"]
 
 [lints.rust]
+missing_docs = "warn"
 unreachable_pub = "warn"
 
 [lints.clippy]

@@ -16,10 +16,12 @@ use crate::sys;
 /// Seconds between two reads of the log while the option is on.
 pub const EVERY: Duration = Duration::from_secs(30);
 
+/// Whether the free-token total is shown. Reads the `free-tokens` config file once and then keeps the answer.
 pub fn enabled() -> bool {
     flag(&FR, "free-tokens")
 }
 
+/// Turns the free-token total on or off and saves the choice in the `free-tokens` config file.
 pub fn set_enabled(on: bool) {
     setflag(&FR, "free-tokens", on)
 }
@@ -53,6 +55,7 @@ pub fn claude_enabled() -> bool {
     flag(&CL, "claude-tokens")
 }
 
+/// Turns the Claude token total on or off and saves the choice in the `claude-tokens` config file.
 pub fn set_claude_enabled(on: bool) {
     setflag(&CL, "claude-tokens", on)
 }

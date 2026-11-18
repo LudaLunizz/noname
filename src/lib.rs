@@ -39,14 +39,18 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub use ratatui::crossterm::event::{KeyCode as K, KeyEvent as Ke, KeyModifiers as M};
 
+/// Colour themes: the built-in ones, user `.theme` files, and the colour accessors the UI draws with.
 #[allow(non_snake_case)]
 pub mod pal {
     use ratatui::style::Color;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// One colour theme: a name, a short description and twelve colours.
     #[derive(Clone, Copy)]
     pub struct Theme {
+        /// Theme name as typed in `/theme` and saved in the config.
         pub name: &'static str,
+        /// One-line description shown next to the name in the theme picker.
         pub desc: &'static str,
         c: [u32; 12],
     }
@@ -94,6 +98,7 @@ pub mod pal {
         "pink", "base",
     ];
 
+    /// Folder that holds the user's `.theme` files.
     pub fn dir() -> String {
         crate::sys::cfgfile("themes")
     }
@@ -111,6 +116,8 @@ pub mod pal {
         u32::from_str_radix(&v, 16).ok()
     }
 
+    /// Builds a theme called `name` from `key = value` lines in `src`.
+    /// Missing keys keep the default theme's colour; `desc = ...` sets the description.
     pub fn parse(name: &str, src: &str) -> Theme {
         let mut c = BUILTIN[0].c;
         let mut desc = String::from("custom");
@@ -155,6 +162,7 @@ pub mod pal {
         v.iter().map(|(n, s)| parse(n, s)).collect()
     }
 
+    /// All themes: the built-in ones plus the user's, where a user theme with the same name replaces a built-in one.
     pub fn all() -> &'static [Theme] {
         ALL.get_or_init(|| {
             let mut v = BUILTIN.to_vec();
@@ -168,12 +176,15 @@ pub mod pal {
         })
     }
 
+    /// Index of the active theme in `all`.
     pub fn cur() -> usize {
         CUR.load(Ordering::Relaxed)
     }
+    /// Makes theme `i` the active one (clamped to the last theme).
     pub fn set(i: usize) {
         CUR.store(i.min(all().len() - 1), Ordering::Relaxed);
     }
+    /// Index of the theme called `n`, ignoring case and punctuation; `catppuccin` and `tokyo` are aliases.
     pub fn find(n: &str) -> Option<usize> {
         let k = |x: &str| {
             x.chars()
@@ -188,9 +199,11 @@ pub mod pal {
                 || (n == "tokyo" && t.name == "tokyo-night")
         })
     }
+    /// Path of the file that stores the selected theme name.
     pub fn file() -> String {
         crate::sys::cfgfile("theme")
     }
+    /// Selects the theme named in `NONAME_THEME` or in the saved theme file, if there is one.
     pub fn load() {
         if let Some(i) = std::env::var("NONAME_THEME")
             .ok()
@@ -200,6 +213,7 @@ pub mod pal {
             set(i);
         }
     }
+    /// Saves the active theme's name to the theme file.
     pub fn save() {
         let f = file();
         if let Some(d) = std::path::Path::new(&f).parent() {
@@ -211,39 +225,51 @@ pub mod pal {
         let v = all()[cur()].c[i];
         Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
     }
+    /// Normal text colour.
     pub fn FG() -> Color {
         c(0)
     }
+    /// Bright (white) text colour, for headings and emphasis.
     pub fn WH() -> Color {
         c(1)
     }
+    /// Muted text colour.
     pub fn MU() -> Color {
         c(2)
     }
+    /// Faint text colour, for hints and borders.
     pub fn FA() -> Color {
         c(3)
     }
+    /// Main accent colour (light purple in the default theme).
     pub fn LI() -> Color {
         c(4)
     }
+    /// Second accent colour.
     pub fn L2() -> Color {
         c(5)
     }
+    /// Soft accent colour, used for code identifiers and quiet highlights.
     pub fn PE() -> Color {
         c(6)
     }
+    /// Cyan, used for running state and info.
     pub fn CY() -> Color {
         c(7)
     }
+    /// Green, used for success and added lines.
     pub fn GR() -> Color {
         c(8)
     }
+    /// Red, used for errors and removed lines.
     pub fn RD() -> Color {
         c(9)
     }
+    /// Pink, used for numbers and task or question highlights.
     pub fn PK() -> Color {
         c(10)
     }
+    /// Base (background) colour of the theme.
     pub fn BASE() -> Color {
         c(11)
     }
@@ -269,6 +295,7 @@ pub mod pal {
     }
 }
 
+/// Model names the mock engine and `/model` cycle through, in the same order as `MID_ALL`.
 pub const MODELS: [&str; 13] = [
     "opus 5.5",
     "sonnet 5.5",
@@ -299,7 +326,9 @@ pub fn opac() -> u8 {
         .unwrap_or(OPAC_DEFAULT)
 }
 
+/// Effort levels, lowest to highest.
 pub const EFF: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Built-in model list as (model id, display name), in the same order as `MODELS`.
 pub const MID_ALL: [(&str, &str); 13] = [
     ("claude-opus-5-5", "Opus 5.5"),
     ("claude-sonnet-5-5", "Sonnet 5.5"),
@@ -315,7 +344,9 @@ pub const MID_ALL: [(&str, &str); 13] = [
     ("claude-sonnet-4-6", "Sonnet 4.6"),
     ("claude-haiku-4-5", "Haiku 4.5"),
 ];
+/// Permission modes in the order Shift+Tab cycles them: default, plan, auto, bypass.
 pub const MODES: [&str; 4] = ["default", "plan", "auto", "bypass"];
+/// Slash commands of the mock engine as (name, description), for the command menu.
 pub const CMDS: [(&str, &str); 9] = [
     ("btw", "side question, main chat keeps going"),
     ("clear", "new session, empty context"),
@@ -328,17 +359,26 @@ pub const CMDS: [(&str, &str); 9] = [
     ("help", "keys and commands"),
 ];
 
+/// Kind of a tool call, which decides its symbol and colour.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tk {
+    /// File read.
     Read,
+    /// File edit or write.
     Edit,
+    /// Shell command.
     Bash,
+    /// Search over files (grep or glob).
     Grep,
+    /// Web search or fetch.
     Web,
+    /// Subagent task.
     Task,
+    /// Any other tool.
     Oth,
 }
 impl Tk {
+    /// Short lowercase name of the kind, such as `read` or `bash`.
     pub fn nm(&self) -> &'static str {
         match self {
             Tk::Read => "read",
@@ -352,66 +392,110 @@ impl Tk {
     }
 }
 
+/// State of a tool call.
 #[derive(Clone, Copy, PartialEq)]
 pub enum St {
+    /// Still running.
     Run,
+    /// Finished successfully.
     Ok,
+    /// Failed or was interrupted.
     Err,
 }
 
+/// One output line of a tool call.
 #[derive(Clone)]
 pub enum Ln {
+    /// Plain output text.
     P(String),
+    /// Added line of a diff: line number and text.
     A(usize, String),
+    /// Removed line of a diff: line number and text.
     D(usize, String),
+    /// Unchanged context line of a diff: line number and text.
     C(usize, String),
 }
 
+/// One tool call shown in the chat.
 #[derive(Clone)]
 pub struct Tool {
+    /// Kind of tool.
     pub k: Tk,
+    /// Display name of the tool.
     pub nm: String,
+    /// Main argument shown after the name, such as a file path or a command.
     pub a: String,
+    /// One-line result summary, such as `212 lines` or `+3 -2`.
     pub sum: String,
+    /// Output lines shown when the call is unfolded.
     pub body: Vec<Ln>,
+    /// Current state of the call.
     pub st: St,
+    /// Tick at which the call started.
     pub t0: u64,
+    /// Tick at which the call finished (0 while it runs).
     pub t1: u64,
 }
 
+/// A permission question for a command, shown in the chat.
 #[derive(Clone)]
 pub struct Ask {
+    /// The command that needs permission.
     pub cmd: String,
+    /// The answer given: `y` yes, `n` no, `a` yes and always; `None` while waiting.
     pub ans: Option<char>,
 }
 
+/// One question of a question dialog.
 #[derive(Clone)]
 pub struct Qq {
+    /// The question text.
     pub q: String,
+    /// Short header (tag) shown with the question.
     pub h: String,
+    /// Answer options as (label, description).
     pub opts: Vec<(String, String)>,
+    /// Whether several options can be picked.
     pub multi: bool,
 }
 
+/// State of an open question dialog (a question set from Claude or a plan approval).
 pub struct Qa {
+    /// Id of the request to answer when the dialog closes.
     pub id: String,
+    /// The original tool input, sent back with the answer.
     pub inp: serde_json::Value,
+    /// The questions of the dialog.
     pub qs: Vec<Qq>,
+    /// Index of the question being asked.
     pub i: usize,
+    /// Highlighted option; one past the last option means the free-text answer.
     pub sel: usize,
+    /// Ticked options of the current question, for multi-select questions.
     pub pick: Vec<bool>,
+    /// Answers so far as (question, answer).
     pub ans: Vec<(String, String)>,
+    /// Whether this is a plan approval dialog instead of a question set.
     pub plan: bool,
 }
 
+/// One block of the chat.
 pub enum B {
+    /// An answered question: the question and the chosen answer.
     Qa(String, String),
+    /// A user message and the clock time it was sent at.
     U(String, String),
+    /// Assistant reply text.
     T(String),
+    /// Assistant thinking text.
     Th(String),
+    /// A tool call.
     Tl(Tool),
+    /// A permission question for a command.
     Ask(Ask),
+    /// A system line, such as `interrupted` or a command result.
     Sys(String),
+    /// End-of-turn recap line (time, tokens, cost) and the tick it was added at.
     Rc(String, u64),
 }
 
@@ -425,150 +509,256 @@ enum Sp {
     Rc(String),
 }
 
+/// A `/btw` side question and its answer, which is typed out letter by letter.
 pub struct Btw {
+    /// The side question.
     pub q: String,
+    /// The part of the answer shown so far.
     pub a: String,
     full: String,
     fin: bool,
 }
 impl Btw {
+    /// Whether the whole answer has been typed out.
     pub fn done(&self) -> bool {
         self.fin && self.a.len() >= self.full.len()
     }
 }
 
+/// All state of the interface: chat blocks, input box, pickers, timers and settings.
+/// Every engine (mock, Claude, Codex, ...) fills it and `main.rs` draws it.
 pub struct App {
+    /// Chat blocks in display order.
     pub bs: Vec<B>,
+    /// Text in the input box.
     pub inp: String,
+    /// Cursor position in the input box, counted in characters.
     pub cur: usize,
+    /// Chat scroll offset in lines from the bottom (0 = showing the newest).
     pub scr: usize,
+    /// Whether tool output is shown unfolded (Ctrl+O).
     pub open: bool,
     q: VecDeque<Sp>,
+    /// Whether a turn is running.
     pub busy: bool,
+    /// Tick counter, about 30 per second; the other tick fields below are values of this counter.
     pub t: u64,
     wait: u32,
+    /// Index of the current model in `MODELS` and `MID_ALL`.
     pub model: usize,
+    /// Index of the current effort level in `EFF`.
     pub eff: usize,
+    /// Index of the current permission mode in `MODES`.
     pub mode: usize,
+    /// Context window used in percent (negative when not known yet).
     pub ctx: f32,
+    /// Five-hour usage limit used in percent (negative when not known yet).
     pub h5: f32,
+    /// Seven-day (week) usage limit used in percent (negative when not known yet).
     pub d7: f32,
+    /// Working directory shown in the footer and the terminal title.
     pub cwd: String,
+    /// Git branch of the working directory (empty when there is none).
     pub br: String,
+    /// The `/btw` side question being shown, if any.
     pub btw: Option<Btw>,
+    /// Todo list as (status, text); status 0 is pending, 1 in progress, 2 done.
     pub todo: Vec<(u8, String)>,
+    /// Whether the todo list is shown (Ctrl+T).
     pub stodo: bool,
+    /// Index in `bs` of the permission question waiting for an answer, if any.
     pub ask: Option<usize>,
     ti: Option<usize>,
     sb: Option<usize>,
+    /// Number of prompts the mock engine has answered; it picks the next scripted reply.
     pub n: usize,
+    /// Submitted prompts and commands, for Up/Down recall.
     pub hist: Vec<String>,
     hi: Option<usize>,
+    /// Set to leave the main loop and exit.
     pub quit: bool,
+    /// Short footer message and the tick at which it disappears.
     pub toast: Option<(String, u64)>,
+    /// Tick at which the current turn started.
     pub t0: u64,
+    /// Index in `bs` of the latest started tool block; the engines set it and nothing reads it.
     pub sel: Option<usize>,
+    /// Session names of the mock engine; set in `App::new` and not read anywhere in `src`.
     pub ses: Vec<&'static str>,
+    /// Index into `ses`; set in `App::new` and not read anywhere in `src`.
     pub si: usize,
+    /// Where the text cursor was placed in the last drawn frame, if anywhere.
     pub cp: Cell<Option<(u16, u16)>>,
+    /// Largest valid value of `scr`, set by the drawing code from the chat height.
     pub smax: Cell<usize>,
+    /// Tick of the last `/clear`, which drives the logo animation.
     pub tc: u64,
+    /// Tick of the last submitted prompt, which drives the send animation.
     pub ts: u64,
+    /// Tick at which details were last toggled (Ctrl+O), which drives the unfold animation.
     pub to: u64,
+    /// Tick of the last permission mode change, which drives the mode glyph animation.
     pub tm: u64,
     tf: bool,
+    /// Display name of the current model, as reported by the engine.
     pub mname: String,
+    /// Current effort level as text.
     pub effs: String,
     lv: Option<live::Lv>,
     cx: Option<codex::Cx>,
+    /// Name of the active animated background, if any.
     pub bgw: Option<&'static str>,
+    /// Whether the work account (token from the keyring) is in use.
     pub work: bool,
+    /// `Some` when a work token exists in the keyring, so the work account can be switched to.
     pub wk: Option<()>,
+    /// Rewind picker: selected user message and the chosen option (0 code and conversation, 1 conversation, 2 code), if open.
     pub rw: Option<(usize, Option<usize>)>,
+    /// Suggested next prompt, shown as ghost text in an empty input box.
     pub sug: Option<String>,
+    /// Highlighted row of the `/` command menu or the `@` file menu.
     pub ms: usize,
+    /// Resume picker: the session list and the selected row, if open.
     pub rs: Option<(Vec<RewindItem>, usize)>,
+    /// Filter text typed in the resume picker.
     pub rq: String,
+    /// Background picker: selected row and the background to restore on Esc, if open.
     pub bp: Option<(usize, Option<&'static str>)>,
+    /// Theme picker: selected theme and the theme to restore on Esc, if open.
     pub tp: Option<(usize, usize)>,
+    /// Default permission picker: selected mode, if open.
     pub pp: Option<usize>,
+    /// `/noname` settings menu: selected row, if open.
     pub ns: Option<usize>,
+    /// Open question dialog, if any.
     pub qa: Option<Qa>,
+    /// Receiver for the result of the running update check, if one is running.
     pub upr: Option<std::sync::mpsc::Receiver<upd::Up>>,
+    /// Update status text shown in the settings menu.
     pub ups: String,
+    /// Whether the running update check was started by the user, so the result is shown as a toast.
     pub upf: bool,
     /// Pending read of the free-token total, the last total, and when it was asked.
     pub frr: Option<std::sync::mpsc::Receiver<Option<u64>>>,
+    /// Last free-token total.
     pub frv: Option<u64>,
     frat: Option<Instant>,
     /// The same three for the Claude token total.
     pub clr: Option<std::sync::mpsc::Receiver<Option<u64>>>,
+    /// Last Claude token total.
     pub clv: Option<u64>,
     clat: Option<Instant>,
     le: u64,
     /// Tick of the last Ctrl+C press (0 = none): a second press within CC_WIN ticks exits.
     cc: u64,
+    /// Attached images as (media type, bytes); `[image #N]` in the input refers to entry N.
     pub imgs: Vec<(&'static str, Vec<u8>)>,
+    /// Pasted blocks folded into `[pasted #N]` tokens in the input; entry N holds the full text.
     pub pst: Vec<String>,
+    /// Find bar (Ctrl+F): the search text and the index of the current match, if open.
     pub fs: Option<(String, usize)>,
+    /// Chat size of the last frame as (total lines, visible lines).
     pub bv: Cell<(usize, usize)>,
+    /// Whether the last turn has finished, shown as a check mark in the terminal title until the next key.
     pub dn: bool,
     und: Vec<(String, usize)>,
     red: Vec<(String, usize)>,
     uk: bool,
     unre: bool,
     drf: Option<String>,
+    /// Input box geometry of the last frame as (top row, height, text width).
     pub ig: Cell<(u16, u16, usize)>,
+    /// Background tasks (shells, monitors, agents, workflows).
     pub tasks: Vec<Task>,
     /// last text copied with a mouse selection; right-click pastes it when no clipboard tool is there
     pub clip: String,
+    /// Task list view: selected task and whether its detail page is open, if the view is open.
     pub tk: Option<(usize, bool)>,
     tkp: u64,
+    /// Open picker (model, effort, MCP servers or diff), if any.
     pub pk: Option<Pk>,
+    /// File suggestions for the current `@` token.
     pub fsug: Vec<String>,
+    /// The `@` query that `fsug` was built for.
     pub fq: Option<String>,
     fqt: u64,
+    /// The `@` query whose menu was dismissed with Esc, so it stays hidden.
     pub fhide: Option<String>,
+    /// Set when Ctrl+G asks to edit the input in an external editor.
     pub edit: bool,
+    /// API retry notice and the tick until which it is shown, if a request is being retried.
     pub retry: Option<(String, u64)>,
+    /// Running hooks as (id, event name, tick it started at).
     pub hooks: Vec<(String, String, u64)>,
+    /// Session title.
     pub stitle: String,
+    /// Models offered by the engine.
     pub models: Vec<ModelEntry>,
+    /// Clickable regions of the last frame as (row, first column, end column, target), where the target is a URL or a file path.
     pub links: std::cell::RefCell<Vec<(u16, u16, u16, String)>>,
+    /// Workspace diff as JSON from the engine, for the diff picker.
     pub diff: Option<serde_json::Value>,
+    /// Mouse selection on the screen as (start column, start row, end column, end row).
     pub msel: Option<(u16, u16, u16, u16)>,
+    /// Whether a mouse drag selection is in progress.
     pub seld: bool,
+    /// Copy of the last drawn screen, used to read the selected text.
     pub txt: std::cell::RefCell<Option<ratatui::buffer::Buffer>>,
+    /// Selection inside the chat text as two (line, column) points, anchor first.
     pub csel: Option<((usize, u16), (usize, u16))>,
+    /// Chat text geometry of the last frame as (top row, visible lines, first visible line, left column).
     pub cg: Cell<(u16, usize, usize, u16)>,
+    /// Plain text of every chat line of the last frame, for selecting and finding text.
     pub btx: std::cell::RefCell<Vec<String>>,
+    /// Last mouse position as (column, row).
     pub my: (u16, u16),
+    /// Last left click as (time, column, row, click count), to detect double and triple clicks.
     pub lc: (Instant, u16, u16, u8),
 }
 
+/// State of a list picker.
 #[derive(Clone, Default)]
 pub struct Pk {
+    /// Picker kind: 0 model, 1 effort, 2 MCP servers, 3 diff file list, 4 diff text of one file.
     pub kind: u8,
+    /// Title of the picker.
     pub title: String,
+    /// Rows as (label, description, key).
     pub items: Vec<(String, String, String)>,
+    /// Selected row.
     pub sel: usize,
+    /// Scroll offset in the diff text view.
     pub off: usize,
+    /// Diff text lines as (marker character, text).
     pub lines: Vec<(char, String)>,
 }
 
+/// A background task: shell, monitor, agent or workflow.
 #[derive(Clone, Default)]
 pub struct Task {
+    /// Task id.
     pub id: String,
+    /// Kind: 0 shell, 1 monitor, 2 agent, 3 workflow; an index into `TKIND`.
     pub kind: u8,
+    /// Description.
     pub desc: String,
+    /// State: 0 running, 1 done, 2 failed, 3 stopped.
     pub st: u8,
+    /// Tick at which the task started.
     pub t0: u64,
+    /// Tick at which the task ended (0 while running).
     pub t1: u64,
+    /// Id of the tool call that started the task.
     pub tool: String,
+    /// Latest activity line.
     pub last: String,
+    /// Number of tool calls the task has made.
     pub tools: u64,
+    /// Number of tokens the task has used.
     pub toks: u64,
+    /// Output text of the task.
     pub out: String,
+    /// Recent activity lines, oldest first.
     pub acts: Vec<String>,
     /// workflow agents seen in workflow_progress: (index, 0 running/queued, 1 done, 2 error)
     pub wf: Vec<(u64, u8)>,
@@ -583,6 +773,7 @@ pub fn tcol(k: u8) -> ratatui::style::Color {
     [pal::CY(), pal::GR(), pal::LI(), pal::PK()][k.min(3) as usize]
 }
 
+/// Task kinds as (symbol, singular name, plural name), indexed by `Task::kind`.
 pub const TKIND: [(&str, &str, &str); 4] = [
     ("$", "shell", "shells"),
     ("~", "monitor", "monitors"),
@@ -606,6 +797,7 @@ fn p(s: &str) -> Ln {
     Ln::P(s.into())
 }
 
+/// Sample Rust source that the mock engine shows when it reads `feed.rs`.
 pub const FEED_RS: &str = "use std::time::Instant;
 
 pub struct Feed {
@@ -616,6 +808,7 @@ pub struct Feed {
 }
 
 impl Feed {
+    #[must_use]
     pub fn new(items: Vec<Card>) -> Self {
         Self { off: 0.0, tgt: 0.0, items, last: Instant::now() }
     }
@@ -723,6 +916,8 @@ impl Default for App {
 }
 
 impl App {
+    /// Creates the mock app: demo chat, scripted replies and default settings, used for demos and `--dump` screenshots.
+    #[must_use]
     pub fn new() -> Self {
         App {
             bs: hist0(),
@@ -844,11 +1039,13 @@ impl App {
         }
     }
 
+    /// Mock wall-clock time as `HH:MM`, derived from the tick counter.
     pub fn clock(&self) -> String {
         let m = 2 + 60 * 14 + (self.t / 1800) as u32;
         format!("{:02}:{:02}", m / 60, m % 60)
     }
 
+    /// Seconds the tool `t` has run, or ran if it is finished, counted from ticks.
     pub fn secs(&self, t: &Tool) -> f32 {
         let e = if t.st == St::Run {
             self.t
@@ -858,18 +1055,22 @@ impl App {
         (e - t.t0) as f32 * 0.033
     }
 
+    /// Seconds since the current turn started.
     pub fn turn_secs(&self) -> f32 {
         (self.t - self.t0) as f32 * 0.033
     }
 
+    /// Index in `bs` of the block that is currently being streamed, if any.
     pub fn streaming(&self) -> Option<usize> {
         self.sb
     }
 
+    /// Shows `s` in the footer for about two seconds.
     pub fn toast(&mut self, s: impl Into<String>) {
         self.toast = Some((s.into(), self.t + 60));
     }
 
+    /// Advances one tick: runs background polls, timers and update checks, then plays the next scripted step or pumps the live engine.
     pub fn step(&mut self) {
         self.t += 1;
         self.fpoll();
@@ -1018,6 +1219,7 @@ impl App {
         self.h5 = (self.h5 + 0.005).min(99.0);
     }
 
+    /// Answers the pending permission question with `y` (yes), `n` (no) or `a` (yes and always).
     pub fn answer(&mut self, c: char) {
         if self.lv.is_some() {
             self.lanswer(c);
@@ -1050,6 +1252,7 @@ impl App {
         }
     }
 
+    /// Interrupts the running turn and clears what was queued.
     pub fn stop(&mut self) {
         if self.cx.is_some() {
             self.cstop();
@@ -1078,6 +1281,7 @@ impl App {
         self.bs.push(B::Sys("interrupted".into()));
     }
 
+    /// Sends the input box: a background name, a `/` command or a prompt for the current engine.
     pub fn submit(&mut self) {
         let s = self.inp.trim().to_string();
         if s.is_empty() {
@@ -1117,6 +1321,8 @@ impl App {
         self.q.extend(sc);
     }
 
+    /// Selects the animated background `k` (`None` turns it off) and saves the choice.
+    /// Says so in the chat if the background is not installed.
     pub fn setbg(&mut self, k: Option<&'static str>) {
         match k {
             Some(k) if !bg::exists(k) => {
@@ -1274,6 +1480,7 @@ impl App {
         }
     }
 
+    /// Starts an update check in the background unless one is running; `force` means the user asked for it.
     pub fn upcheck(&mut self, force: bool) {
         if self.upr.is_some() {
             return;
@@ -1283,6 +1490,7 @@ impl App {
         self.upr = Some(upd::check(force));
     }
 
+    /// Rows of the `/noname` settings menu as (label, current value).
     pub fn nrows(&self) -> Vec<(&'static str, String)> {
         vec![
             (
@@ -1339,6 +1547,7 @@ impl App {
         ]
     }
 
+    /// Steps the default effort setting to the next (`up`) or previous level; the first step means Claude's own default.
     pub fn cycleff(&mut self, up: bool) {
         let n = EFF.len() + 1;
         let i = defeff()
@@ -1352,6 +1561,7 @@ impl App {
         ));
     }
 
+    /// Sets the default permission mode to index `i` of `MODES`, saves it and applies it to the session.
     pub fn setdefmode(&mut self, i: usize) {
         if self.lv.is_some() || self.cx.is_some() {
             let f = modefile();
@@ -1413,6 +1623,7 @@ impl App {
         });
     }
 
+    /// Activates theme `i` and saves the choice when a real engine is running.
     pub fn settheme(&mut self, i: usize) {
         pal::set(i);
         self.toast(format!("theme  {}", pal::all()[pal::cur()].name));
@@ -1421,6 +1632,7 @@ impl App {
         }
     }
 
+    /// Runs the slash command `r`, given without the leading `/`.
     pub fn cmd(&mut self, r: &str) {
         let (c0, a0) = r.split_once(' ').unwrap_or((r, ""));
         if c0 == "noname" {
@@ -1538,6 +1750,7 @@ impl App {
             .unwrap_or(self.inp.len())
     }
 
+    /// Inserts `c` at the cursor.
     pub fn ins(&mut self, c: char) {
         self.sug = None;
         self.ms = 0;
@@ -1613,12 +1826,14 @@ impl App {
         self.ms = 0;
     }
 
+    /// Inserts the text `t` at the cursor.
     pub fn put(&mut self, t: &str) {
         for c in t.chars() {
             self.ins(c)
         }
     }
 
+    /// The `@` token that ends at the cursor, as (character index of the `@`, text after it).
     pub fn attok(&self) -> Option<(usize, String)> {
         let cs: Vec<char> = self.inp.chars().collect();
         let mut j = self.cur.min(cs.len());
@@ -1657,6 +1872,7 @@ impl App {
         }
     }
 
+    /// File suggestions for the `@` token at the cursor, or none when the menu is hidden.
     pub fn atmenu(&self) -> Vec<String> {
         match self.attok() {
             Some((_, q)) if self.fhide.as_deref() != Some(q.as_str()) => self.fsug.clone(),
@@ -1664,6 +1880,7 @@ impl App {
         }
     }
 
+    /// Replaces the `@` token at the cursor with the path `p`.
     pub fn atpick(&mut self, p: &str) {
         let Some((j, _)) = self.attok() else { return };
         let cs: Vec<char> = self.inp.chars().collect();
@@ -1685,12 +1902,14 @@ impl App {
         self.fq = None;
     }
 
+    /// Maps a screen position to (chat line, column) when it lies on the chat text.
     pub fn cpos(&self, x: u16, y: u16) -> Option<(usize, u16)> {
         let (yt, n, s0, x0) = self.cg.get();
         (n > 0 && y >= yt && ((y - yt) as usize) < n)
             .then(|| (s0 + (y - yt) as usize, x.saturating_sub(x0)))
     }
 
+    /// Like `cpos`, but a position outside the chat text snaps to its nearest edge.
     pub fn cclamp(&self, x: u16, y: u16) -> (usize, u16) {
         let (yt, n, s0, _) = self.cg.get();
         if y < yt {
@@ -1702,6 +1921,7 @@ impl App {
         }
     }
 
+    /// Start and end (line, column) of the word at chat position `p`.
     pub fn word(&self, p: (usize, u16)) -> Option<((usize, u16), (usize, u16))> {
         let bt = self.btx.borrow();
         let l = bt.get(p.0)?;
@@ -1728,6 +1948,7 @@ impl App {
         Some(((p.0, cs[a].0), (p.0, cs[b].1)))
     }
 
+    /// Screen rectangle (x0, y0, x1, y1) of the chat selection, cut to the visible lines.
     pub fn cvis(&self) -> Option<(u16, u16, u16, u16)> {
         let (a, b) = self.csel?;
         let (p0, p1) = if a <= b { (a, b) } else { (b, a) };
@@ -1748,6 +1969,7 @@ impl App {
         Some((st.0, st.1, en.0, en.1))
     }
 
+    /// Text of the chat selection, one entry per line.
     pub fn ctext(&self) -> String {
         let Some((a, b)) = self.csel else {
             return String::new();
@@ -1774,6 +1996,7 @@ impl App {
         tidy(ls)
     }
 
+    /// Handles a click at a screen cell: opens the link there as a URL, file or folder.
     pub fn click(&mut self, x: u16, y: u16) {
         let hit = self
             .links
@@ -1866,6 +2089,7 @@ impl App {
         }
     }
 
+    /// Opens the model picker.
     pub fn modelpicker(&mut self) {
         let cur = MID_ALL.get(self.model).map(|x| x.0).unwrap_or("");
         let items: Vec<(String, String, String)> = self
@@ -1887,6 +2111,7 @@ impl App {
         });
     }
 
+    /// Opens the effort picker.
     pub fn effortpicker(&mut self) {
         let cur = MID_ALL.get(self.model).map(|x| x.0).unwrap_or("");
         let lv: Vec<String> = self
@@ -1910,6 +2135,7 @@ impl App {
         });
     }
 
+    /// Attaches image bytes `b` and inserts an `[image #N]` token; returns `false` with a toast when they are not an image or are too large.
     pub fn attach(&mut self, b: Vec<u8>) -> bool {
         match img::shrink(b) {
             Ok((b, m)) => {
@@ -1949,6 +2175,7 @@ impl App {
         }
     }
 
+    /// Handles pasted text: image files are attached, long text is folded into a `[pasted #N]` token, short text is typed.
     pub fn paste(&mut self, s: String) {
         if self.rs.is_none() {
             self.snap((self.inp.clone(), self.cur));
@@ -2011,6 +2238,7 @@ impl App {
         }
     }
 
+    /// Replaces every `[pasted #N]` token in `s` with the text it stands for.
     pub fn expand(&self, s: &str) -> String {
         let mut o = String::new();
         let mut r = s;
@@ -2064,6 +2292,7 @@ impl App {
         true
     }
 
+    /// Images referenced by `[image #N]` tokens in `s` as (media type, bytes), or `None` when there are none.
     pub fn content(&self, s: &str) -> Option<Vec<(&'static str, &[u8])>> {
         let mut seen = vec![];
         let cs: Vec<char> = s.chars().collect();
@@ -2091,6 +2320,7 @@ impl App {
         )
     }
 
+    /// Resume picker rows that match the filter in `rq`.
     pub fn rhits(&self) -> Vec<(String, String, String)> {
         let Some((v, _)) = &self.rs else {
             return vec![];
@@ -2104,6 +2334,7 @@ impl App {
             .collect()
     }
 
+    /// Indices in `bs` of the user messages.
     pub fn users(&self) -> Vec<usize> {
         self.bs
             .iter()
@@ -2139,6 +2370,7 @@ impl App {
         }
     }
 
+    /// Rewinds the chat to user message `i`: `mode` 0 is code and conversation, 1 conversation only, 2 code only.
     pub fn rewind(&mut self, i: usize, mode: usize) {
         if self.lv.is_some() {
             self.lrewind(i, mode);
@@ -2156,6 +2388,7 @@ impl App {
         self.toast("rewound");
     }
 
+    /// Handles one key press, and records an undo step when the input text changes.
     pub fn key(&mut self, k: KeyEvent) {
         let b = (self.inp.clone(), self.cur);
         let typ = matches!(k.code, KeyCode::Char(c) if !k.modifiers.intersects(Km::CONTROL | Km::ALT) && !c.is_whitespace());
@@ -2298,6 +2531,7 @@ impl App {
         self.toast(format!("copied {} lines", x.lines().count()));
     }
 
+    /// Matches of the find bar in the chat text as (line, column, width).
     pub fn fhits(&self) -> Vec<(usize, usize, usize)> {
         let Some((q, _)) = &self.fs else {
             return vec![];
@@ -2845,6 +3079,7 @@ impl App {
         }
     }
 
+    /// Number of successful edit tool calls since the last user message.
     pub fn tedits(&self) -> usize {
         let lu = self
             .bs
@@ -2857,6 +3092,7 @@ impl App {
             .count()
     }
 
+    /// Indices in `bs` of the tool calls.
     pub fn tools(&self) -> Vec<usize> {
         self.bs
             .iter()
@@ -2892,6 +3128,7 @@ fn one_line(s: &str, n: usize) -> String {
     }
 }
 
+/// Up to 12 files and folders under the current directory that fuzzy-match `q`, best first; hidden entries and build folders are skipped.
 pub fn localfiles(q: &str) -> Vec<String> {
     let root = std::env::current_dir().unwrap_or_default();
     let mut all = vec![];
@@ -2957,6 +3194,7 @@ pub fn localfiles(q: &str) -> Vec<String> {
     hits.into_iter().take(12).map(|x| x.1).collect()
 }
 
+/// Diff text of `path` from the workspace diff `d` as (marker character, text), hunk headers included.
 pub fn difflines(d: Option<&serde_json::Value>, path: &str) -> Vec<(char, String)> {
     let mut o = vec![];
     let Some(d) = d else { return o };
@@ -2994,6 +3232,7 @@ fn tokend(cs: &[char]) -> Option<usize> {
     atok(&t).filter(|&(_, l)| l == t.chars().count()).map(|_| o)
 }
 
+/// Reads a `[pasted #N]` token at the start of `s` as (N, length in characters).
 pub fn ptok(s: &str) -> Option<(usize, usize)> {
     let r = s.strip_prefix("[pasted #")?;
     let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -3010,10 +3249,12 @@ pub fn ptok(s: &str) -> Option<(usize, usize)> {
     Some((d.parse().ok()?, 9 + d.len() + e + 1))
 }
 
+/// Reads an image or pasted token at the start of `s` as (N, length in characters).
 pub fn atok(s: &str) -> Option<(usize, usize)> {
     imgtok(s).or_else(|| ptok(s))
 }
 
+/// Reads an `[image #N]` token at the start of `s` as (N, length in characters).
 pub fn imgtok(s: &str) -> Option<(usize, usize)> {
     let r = s.strip_prefix("[image #")?;
     let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -3023,6 +3264,7 @@ pub fn imgtok(s: &str) -> Option<(usize, usize)> {
     Some((d.parse().ok()?, 9 + d.len()))
 }
 
+/// Splits `s` into spans, using `hi` for image and pasted tokens and `base` for the rest.
 pub fn imgspans(s: &str, base: Style, hi: Style) -> Vec<Span<'static>> {
     let mut v = vec![];
     let mut cur = String::new();
@@ -3047,6 +3289,7 @@ pub fn imgspans(s: &str, base: Style, hi: Style) -> Vec<Span<'static>> {
     v
 }
 
+/// Word-wraps `s` to width `w`, keeping existing line breaks.
 pub fn wrap(s: &str, w: usize) -> Vec<String> {
     let mut o = vec![];
     for para in s.split('\n') {
@@ -3073,6 +3316,7 @@ fn words(s: &str) -> Vec<String> {
     v
 }
 
+/// Word-wraps styled text segments to width `w` into lines of spans.
 pub fn wsegs(segs: &[(String, Style)], w: usize) -> Vec<Vec<Span<'static>>> {
     let w = w.max(4);
     let mut ls = vec![];
@@ -3130,18 +3374,31 @@ pub fn wsegs(segs: &[(String, Style)], w: usize) -> Vec<Vec<Span<'static>>> {
     ls
 }
 
+/// Styles for rendering markdown and code in the chat.
 pub struct Md {
+    /// Normal text.
     pub t: Style,
+    /// Bold text and table headings.
     pub b: Style,
+    /// Inline code.
     pub c: Style,
+    /// Identifiers in code blocks.
     pub fe: Style,
+    /// Keywords in code blocks.
     pub kw: Style,
+    /// String literals in code blocks.
     pub st: Style,
+    /// Comments in code blocks.
     pub cm: Style,
+    /// Numbers in code blocks.
     pub nu: Style,
+    /// Bullet prefix of list items.
     pub bul: &'static str,
+    /// Style of the bullet prefix.
     pub bs: Style,
+    /// Prefix of each line in a code block.
     pub fpre: &'static str,
+    /// Style of the code block prefix and of table cells after the first column.
     pub fps: Style,
 }
 
@@ -3186,6 +3443,7 @@ const KW: [&str; 16] = [
     "match", "return", "as",
 ];
 
+/// Syntax-highlights one line of code into spans.
 pub fn hl(s: &str, m: &Md) -> Vec<Span<'static>> {
     let mut v = vec![];
     let (code, cmt) = match s.find("//") {
@@ -3406,6 +3664,7 @@ fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
     }
 }
 
+/// Renders markdown text `s` into lines for width `w`.
 pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
     let mut o = vec![];
     let mut inf = false;
@@ -3474,6 +3733,7 @@ pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
     r
 }
 
+/// The last `h` lines of `v`, moved up by the scroll offset `scr`, which is clamped to what fits.
 pub fn tail(v: Vec<Line<'static>>, h: usize, scr: &mut usize) -> Vec<Line<'static>> {
     let n = v.len();
     if n <= h {
@@ -3485,6 +3745,7 @@ pub fn tail(v: Vec<Line<'static>>, h: usize, scr: &mut usize) -> Vec<Line<'stati
     v.into_iter().skip(s).take(h).collect()
 }
 
+/// Input box layout for width `w` as (start, end) character indices of each visual line.
 pub fn inlay(s: &str, w: usize) -> (Vec<usize>, Vec<usize>) {
     let w = w.max(2);
     let cs: Vec<char> = s.chars().collect();
@@ -3544,6 +3805,7 @@ pub fn inlay(s: &str, w: usize) -> (Vec<usize>, Vec<usize>) {
     (st, en)
 }
 
+/// Wraps the input `s` to width `w`: the visual lines and the cursor as (column, line) for character index `cur`.
 pub fn inwrap(s: &str, cur: usize, w: usize) -> (Vec<String>, (usize, usize)) {
     let w = w.max(2);
     let cs: Vec<char> = s.chars().collect();
@@ -3577,12 +3839,14 @@ pub fn inwrap(s: &str, cur: usize, w: usize) -> (Vec<String>, (usize, usize)) {
     (ls, (cx, cy))
 }
 
+/// Splits a bar of `n` cells for `p` percent into the filled part (`on`) and the empty part (`off`).
 pub fn bar(p: f32, n: usize, on: &str, off: &str) -> (String, String) {
     let k = ((p / 100.0) * n as f32).round() as usize;
     let k = k.min(n);
     (on.repeat(k), off.repeat(n - k))
 }
 
+/// One line of width `w` with `l` at the left and `r` at the right.
 pub fn lr(l: Vec<Span<'static>>, r: Vec<Span<'static>>, w: usize) -> Line<'static> {
     let lw: usize = l.iter().map(|s| s.content.width()).sum();
     let rw: usize = r.iter().map(|s| s.content.width()).sum();
@@ -3592,27 +3856,41 @@ pub fn lr(l: Vec<Span<'static>>, r: Vec<Span<'static>>, w: usize) -> Line<'stati
     Line::from(v)
 }
 
+/// Display width of the spans `v` in terminal cells.
 pub fn sw(v: &[Span]) -> usize {
     v.iter().map(|s| s.content.width()).sum()
 }
 
+/// Puts the terminal cursor at (`x`, `y`) and remembers it in `a`.
 pub fn setcur(f: &mut Frame, a: &App, x: u16, y: u16) {
     f.set_cursor_position((x, y));
     a.cp.set(Some((x, y)));
 }
 
+/// Style with foreground colour `c`.
 pub fn st(c: Color) -> Style {
     Style::new().fg(c)
 }
 
+/// A screen of the interface: it draws a frame from the app state and can handle keys.
 pub trait V {
+    /// Draws one frame from the app state `a`.
     fn draw(&mut self, f: &mut Frame, a: &App);
+    /// Handles a key before the app does; returns `true` when it was used.
     fn key(&mut self, _k: &KeyEvent, _a: &mut App) -> bool {
         false
     }
+    /// Sets up the demo scenario named `_s` in `_a`, for `--dump` screenshots.
     fn scen(&mut self, _s: &str, _a: &mut App) {}
 }
 
+/// Runs the interface with the screen `v` until the user quits.
+///
+/// Also handles `--version` and `--dump` on the command line.
+///
+/// # Errors
+///
+/// Returns any I/O error from setting up or restoring the terminal, drawing, reading events, or writing the `--dump` files.
 pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
@@ -4135,10 +4413,12 @@ fn cur_label(q: &Option<Qa>, j: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Names of the three optional footer bars, in the order of `bars`.
 pub const BARS: [&str; 3] = ["context bar", "5h bar", "week bar"];
 const BKEY: [&str; 3] = ["context", "5h", "week"];
 static BSET: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
 
+/// Which footer bars are on (context, 5h, week), read from the config once.
 pub fn bars() -> [bool; 3] {
     use std::sync::atomic::Ordering::Relaxed;
     let mut m = BSET.load(Relaxed);
@@ -4152,6 +4432,7 @@ pub fn bars() -> [bool; 3] {
     [m & 1 != 0, m & 2 != 0, m & 4 != 0]
 }
 
+/// Turns footer bar `i` on or off and saves the choice.
 pub fn setbar(i: usize, on: bool) {
     let mut b = bars();
     b[i] = on;
@@ -4167,6 +4448,7 @@ pub fn setbar(i: usize, on: bool) {
     let _ = std::fs::write(&f, hid.join(","));
 }
 
+/// Layout settings as (name, choices), indexed as in `lay`; the first choice is the default.
 pub const LAYOUT: [(&str, &[&str]); 6] = [
     ("input", &["bottom", "top"]),
     (
@@ -4216,6 +4498,7 @@ fn layload() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Index of the chosen option of layout setting `i` in `LAYOUT`.
 pub fn lay(i: usize) -> usize {
     use std::sync::atomic::Ordering::Relaxed;
     let m = LSET[i].load(Relaxed);
@@ -4232,6 +4515,7 @@ pub fn lay(i: usize) -> usize {
     v
 }
 
+/// Chooses option `v` for layout setting `i` and saves all layout settings.
 pub fn setlay(i: usize, v: usize) {
     LSET[i].store(v as u8, std::sync::atomic::Ordering::Relaxed);
     let body: String = (0..LAYOUT.len())
@@ -4244,10 +4528,12 @@ pub fn setlay(i: usize, v: usize) {
     let _ = std::fs::write(&f, body);
 }
 
+/// Path of the file that stores the default permission mode.
 pub fn modefile() -> String {
     sys::cfgfile("permission")
 }
 
+/// Index in `MODES` for a mode name or alias, or `None` if it is not one.
 pub fn modeidx(s: &str) -> Option<usize> {
     match s.trim().to_lowercase().as_str() {
         "default" | "ask" | "normal" => Some(0),
@@ -4260,6 +4546,7 @@ pub fn modeidx(s: &str) -> Option<usize> {
 
 static RCLICK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
 
+/// Whether right-click paste is on.
 pub fn rclick() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
     let mut m = RCLICK.load(Relaxed);
@@ -4273,6 +4560,7 @@ pub fn rclick() -> bool {
     m == 1
 }
 
+/// Turns right-click paste on or off and saves the choice.
 pub fn setrclick(on: bool) {
     RCLICK.store(on as u8, std::sync::atomic::Ordering::Relaxed);
     let f = sys::cfgfile("rclick");
@@ -4282,11 +4570,13 @@ pub fn setrclick(on: bool) {
     let _ = std::fs::write(&f, if on { "on" } else { "off" });
 }
 
+/// The saved default effort, or `None` to leave it to Claude.
 pub fn defeff() -> Option<&'static str> {
     let v = std::fs::read_to_string(sys::cfgfile("effort")).unwrap_or_default();
     EFF.iter().copied().find(|x| *x == v.trim())
 }
 
+/// Saves `e` as the default effort; `None` removes the setting.
 pub fn setdefeff(e: Option<&str>) {
     let f = sys::cfgfile("effort");
     match e {
@@ -4302,12 +4592,14 @@ pub fn setdefeff(e: Option<&str>) {
     }
 }
 
+/// Index in `MODES` of the saved default permission mode, if one is set.
 pub fn defmode() -> Option<usize> {
     std::fs::read_to_string(modefile())
         .ok()
         .and_then(|x| modeidx(&x))
 }
 
+/// Path of the file that stores the chosen animated background.
 pub fn bgfile() -> String {
     sys::cfgfile("background")
 }
@@ -4724,6 +5016,7 @@ fn dump<T: V + Clone>(v0: &mut T, args: &[String]) -> io::Result<()> {
 
 const NZ: &[u8] = b"0123456789abcdefABCDEF$%@#";
 
+/// Formats the end-of-turn recap, such as `12.4s  ·  18.2k tok  ·  $0.08`, with the weekly-limit share added when `dw` is at least 0.5.
 pub fn rcfmt(secs: f32, tok: u64, usd: f64, dw: f32) -> String {
     let t = if tok >= 1000 {
         format!("{:.1}k", tok as f64 / 1000.0)
@@ -4737,10 +5030,12 @@ pub fn rcfmt(secs: f32, tok: u64, usd: f64, dw: f32) -> String {
     s
 }
 
+/// Smooth value from 0 to 1 that repeats every `per` ticks, at tick `t`.
 pub fn pulse(t: u64, per: f32) -> f32 {
     ((t as f32 / per * std::f32::consts::TAU).sin() + 1.0) / 2.0
 }
 
+/// Mixes two numbers into one pseudo-random number.
 pub fn hsh(a: u64, b: u64) -> u64 {
     let mut x = a.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ b.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     x ^= x >> 29;
@@ -4748,6 +5043,7 @@ pub fn hsh(a: u64, b: u64) -> u64 {
     x ^ (x >> 32)
 }
 
+/// Pseudo-random glyph for position `i` at tick `t`, used for the noise effect.
 pub fn nz(t: u64, i: u64) -> char {
     NZ[(hsh(t / 2, i) % NZ.len() as u64) as usize] as char
 }
@@ -4759,6 +5055,7 @@ fn rgb(c: Color) -> (f32, f32, f32) {
     }
 }
 
+/// Colour at position `f` (0 to 1) along the gradient made of `cs`.
 pub fn grad(cs: &[Color], f: f32) -> Color {
     let f = f.clamp(0.0, 1.0) * (cs.len() - 1) as f32;
     let i = (f.floor() as usize).min(cs.len() - 2);
@@ -4773,6 +5070,7 @@ fn wave(i: usize, t: u64) -> f32 {
     if f > 1.0 { 2.0 - f } else { f }
 }
 
+/// `n` noise glyphs for tick `t` coloured along the gradient `cs`; `seed` makes separate noise strings differ.
 pub fn noise(n: usize, t: u64, seed: u64, cs: &[Color]) -> Vec<Span<'static>> {
     (0..n)
         .map(|i| {
@@ -4784,6 +5082,8 @@ pub fn noise(n: usize, t: u64, seed: u64, cs: &[Color]) -> Vec<Span<'static>> {
         .collect()
 }
 
+/// Text `s` shown as the noise effect that settles into the real characters from left to right as `el` grows; settled characters use `done`.
+/// `t` is the tick, `seed` varies the noise and `cs` is the gradient of the unsettled glyphs.
 pub fn decode(
     s: &str,
     el: u64,

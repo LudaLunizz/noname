@@ -1,3 +1,5 @@
+//! Build script: records the git revision, dirty flag, commit date and target triple for `upd`.
+
 use std::process::Command;
 
 fn git(a: &[&str]) -> String {
