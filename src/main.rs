@@ -2156,66 +2156,52 @@ impl V for V1 {
         }
         self.lt = a.t;
         let db = self.db;
-        let (c1, c2) = bar(db[0], 10, "▰", "▱");
-        let (h1, h2) = bar(db[1], 10, "▰", "▱");
-        let (d1, d2) = bar(db[2], 10, "▰", "▱");
-        let segs = [
-            vec![
-                Span::styled(
-                    if free::enabled() && free::claude_enabled() {
-                        ""
-                    } else {
-                        "context "
-                    },
-                    st(FA()),
-                ),
-                Span::styled(c1, st(LI())),
-                Span::styled(c2, st(FA())),
-                Span::styled(
-                    if tg[0] < 0.0 {
-                        " –".to_string()
-                    } else {
-                        format!(" {:.0}%", db[0])
-                    },
-                    st(FG()),
-                ),
-            ],
-            vec![
-                Span::styled("5h ", st(FA())),
-                Span::styled(h1, st(CY())),
-                Span::styled(h2, st(FA())),
-                Span::styled(
-                    if tg[1] < 0.0 {
-                        " –".to_string()
-                    } else {
-                        format!(" {:.0}%", db[1])
-                    },
-                    st(FG()),
-                ),
-            ],
-            vec![
-                Span::styled("week ", st(FA())),
-                Span::styled(d1, st(CY())),
-                Span::styled(d2, st(FA())),
-                Span::styled(
-                    if tg[2] < 0.0 {
-                        " –".to_string()
-                    } else {
-                        format!(" {:.0}%", db[2])
-                    },
-                    st(FG()),
-                ),
-            ],
-        ];
         // opencode and agy send no usage numbers, so its empty bars are left out instead of showing dashes
         let oc = a.is_opencode() || a.is_agy();
         let vis = bars();
-        let shown: Vec<Vec<Span<'static>>> = segs
-            .into_iter()
-            .enumerate()
-            .filter(|(j, _)| vis[*j] && !(oc && tg[*j] < 0.0))
-            .map(|(_, x)| x)
-            .collect();
+        let nolabel = free::enabled() && free::claude_enabled();
+        // the bars are `bw` cells wide; a narrow window shrinks them instead of dropping the usage
+        let mk = |bw: usize| -> Vec<Vec<Span<'static>>> {
+            let (c1, c2) = bar(db[0], bw, "▰", "▱");
+            let (h1, h2) = bar(db[1], bw, "▰", "▱");
+            let (d1, d2) = bar(db[2], bw, "▰", "▱");
+            let pct = |j: usize| {
+                Span::styled(
+                    if tg[j] < 0.0 {
+                        " –".to_string()
+                    } else {
+                        format!(" {:.0}%", db[j])
+                    },
+                    st(FG()),
+                )
+            };
+            let segs = [
+                vec![
+                    Span::styled(if nolabel { "" } else { "context " }, st(FA())),
+                    Span::styled(c1, st(LI())),
+                    Span::styled(c2, st(FA())),
+                    pct(0),
+                ],
+                vec![
+                    Span::styled("5h ", st(FA())),
+                    Span::styled(h1, st(CY())),
+                    Span::styled(h2, st(FA())),
+                    pct(1),
+                ],
+                vec![
+                    Span::styled("week ", st(FA())),
+                    Span::styled(d1, st(CY())),
+                    Span::styled(d2, st(FA())),
+                    pct(2),
+                ],
+            ];
+            segs.into_iter()
+                .enumerate()
+                .filter(|(j, _)| vis[*j] && !(oc && tg[*j] < 0.0))
+                .map(|(_, x)| x)
+                .collect()
+        };
+        let shown = mk(10);
         let toast = match &a.toast {
             Some((t, e)) if !t.starts_with("mode") => {
                 decode(t, a.t + 60 - e, a.t, 13, st(L2()), &gd())
@@ -2340,9 +2326,9 @@ impl V for V1 {
             // on the right-hand side the totals sit 2 columns left of the effort label
             let mr = m.as_ref().map(|_| {
                 let mut v = mid.clone();
-                // "medium" is two letters longer than "high": one column less so the gap looks the same
-                // (and so the label still fits while shells are listed)
-                let gap = if a.effs == "medium" { 1 } else { 2 };
+                // "medium" is two letters longer than "high": two columns less so the gap looks the same
+                // (and so the context bar and the label still fit in a narrow window)
+                let gap = if a.effs == "medium" { 0 } else { 2 };
                 v.push(pad(gap));
                 Ch::S(v)
             });
@@ -2377,6 +2363,17 @@ impl V for V1 {
                 mode -= 1;
                 ls = join(l, &shown, mode);
                 rs = join(r, &shown, mode);
+            }
+            if mode == 0 && l.iter().chain(r).any(|x| matches!(x, Ch::U)) {
+                // even one bar does not fit at full size: shorten the bars before giving up
+                for bw in (3..10).rev() {
+                    let sh = mk(bw);
+                    let (l2, r2) = (join(l, &sh, 1), join(r, &sh, 1));
+                    if fits(&l2, &r2) {
+                        (ls, rs) = (l2, r2);
+                        break;
+                    }
+                }
             }
             let cok = cwn > 0 && fits(&ls, &rs);
             f.render_widget(Paragraph::new(lr(ls, rs, w)), col(y, 1));
