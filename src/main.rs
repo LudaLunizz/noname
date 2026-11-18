@@ -309,7 +309,12 @@ fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, Str
         let r = &t[i..];
         let at = r.starts_with(&['h', 't', 't', 'p', 's', ':', '/', '/']) || r.starts_with(&['h', 't', 't', 'p', ':', '/', '/']);
         if !at || (i > 0 && t[i - 1].is_alphanumeric()) {
-            i += 1;
+            if let Some(e) = path_at(&t, i) {
+                piece(&cs, i, e, t[i..e].iter().collect(), &mut o);
+                i = e;
+            } else {
+                i += 1;
+            }
             continue;
         }
         let mut j = i;
@@ -328,22 +333,52 @@ fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, Str
         }
         let u: String = t[i..e].iter().collect();
         if u.len() > 10 {
-            // one piece per line the url runs over
-            let mut q = i;
-            while q < e {
-                let ln = cs[q].0;
-                let mut z = q;
-                while z < e && cs[z].0 == ln {
-                    z += 1;
-                }
-                let xb = cs[z - 1].1 + cs[z - 1].3;
-                o.push((ln, cs[q].1 as u16, xb as u16, u.clone()));
-                q = z;
-            }
+            piece(&cs, i, e, u, &mut o);
         }
         i = j.max(i + 1);
     }
     o
+}
+
+/// One link piece per line that chars i..e of `cs` run over, each with the full target.
+fn piece(cs: &[(usize, usize, char, usize)], i: usize, e: usize, u: String, o: &mut Vec<(usize, u16, u16, String)>) {
+    let mut q = i;
+    while q < e {
+        let ln = cs[q].0;
+        let mut z = q;
+        while z < e && cs[z].0 == ln {
+            z += 1;
+        }
+        let xb = cs[z - 1].1 + cs[z - 1].3;
+        o.push((ln, cs[q].1 as u16, xb as u16, u.clone()));
+        q = z;
+    }
+}
+
+/// A file or folder path that starts at t[i] and exists on disk: returns where it ends.
+/// It must start a word (after a space, a bracket, a quote or `*`) and look like a path
+/// (a `/`, a `.` or a leading `~`); a `:line` or `:line:col` after it is kept, so the
+/// click can open the file at that line.
+fn path_at(t: &[char], i: usize) -> Option<usize> {
+    if t[i].is_whitespace() || (i > 0 && !(t[i - 1].is_whitespace() || matches!(t[i - 1], '(' | '[' | '{' | '"' | '\'' | '`' | '<' | '*' | '='))) {
+        return None;
+    }
+    if !(t[i] == '/' || t[i] == '~' || t[i] == '.' || t[i].is_alphanumeric() || t[i] == '_') {
+        return None;
+    }
+    let mut j = i;
+    while j < t.len() && !t[j].is_whitespace() && !matches!(t[j], '<' | '>' | '"' | '`' | '│' | '…' | '|') {
+        j += 1;
+    }
+    let mut e = j;
+    while e > i && matches!(t[e - 1], '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '*' | ')' | ']' | '}') {
+        e -= 1;
+    }
+    let s: String = t[i..e].iter().collect();
+    if s.chars().count() < 2 || !(s.contains('/') || s.contains('.') || s.starts_with('~')) || !s.chars().any(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    noname::sys::exists(noname::sys::split_line(&s).0).then_some(e)
 }
 
 /// The panel lines (menus and pickers above the input) cut to `h` rows. When they do not
@@ -1725,6 +1760,34 @@ mod tests {
         // the window can start in the middle of the link
         let l2 = links(&bl, 2, bl.len(), 30);
         assert!(l2.iter().all(|x| x.3 != u));
+    }
+
+    #[test]
+    fn finds_paths_that_exist() {
+        let d = std::env::temp_dir().join(format!("nn-paths-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub/a.rs"), "x").unwrap();
+        let ds = d.to_string_lossy().to_string();
+        let f = format!("{ds}/sub/a.rs");
+        // a file, a file with a line, a folder, a folder in backticks with a dot after it
+        assert_eq!(u(&format!("see {f}.")), [f.clone()]);
+        assert_eq!(u(&format!("at {f}:12:4,")), [format!("{f}:12:4")]);
+        assert_eq!(u(&format!("({ds}/sub)")), [format!("{ds}/sub")]);
+        assert_eq!(u(&format!("`{ds}/sub/`.")), [format!("{ds}/sub/")]);
+        // relative to the working folder (cargo test runs in the crate root)
+        assert_eq!(u("edit src/main.rs and Cargo.toml"), ["src/main.rs", "Cargo.toml"]);
+        // not a path: missing, plain words, mid-word, a url's own path
+        assert!(u(&format!("{ds}/nope.rs and/or e.g. x{f}")).is_empty());
+        assert_eq!(u("https://example.com/src/main.rs"), ["https://example.com/src/main.rs"]);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn line_numbers_split_off() {
+        assert_eq!(noname::sys::split_line("a/b.rs:12"), ("a/b.rs", "12"));
+        assert_eq!(noname::sys::split_line("a/b.rs:12:4"), ("a/b.rs", "12"));
+        assert_eq!(noname::sys::split_line("a/b.rs"), ("a/b.rs", ""));
+        assert_eq!(noname::sys::split_line("C:/x"), ("C:/x", ""));
     }
 
     #[test]

@@ -1510,13 +1510,16 @@ impl App {
                 self.toast("open link");
                 return;
             }
-            let (path, line) = match p.rsplit_once(':') {
-                Some((a, b)) if b.chars().all(|c| c.is_ascii_digit()) && !b.is_empty() => (a.to_string(), b.to_string()),
-                _ => (p.clone(), String::new()),
-            };
-            let abs = if std::path::Path::new(&path).is_absolute() { path.clone() } else { format!("{}/{path}", std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default()) };
-            sys::open(&abs, &line);
-            self.toast(format!("open  {}", path.rsplit('/').next().unwrap_or(&path)));
+            let (path, line) = sys::split_line(&p);
+            let abs = sys::resolve(path);
+            let name = path.trim_end_matches('/').rsplit('/').next().filter(|x| !x.is_empty()).unwrap_or(path).to_string();
+            if abs.is_dir() {
+                sys::open_dir(&abs.to_string_lossy());
+                self.toast(format!("folder  {name}"));
+            } else {
+                sys::open(&abs.to_string_lossy(), line);
+                self.toast(format!("open  {name}"));
+            }
         }
     }
 

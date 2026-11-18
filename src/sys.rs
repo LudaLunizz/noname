@@ -306,6 +306,89 @@ pub fn open_url(url: &str) {
     let _ = c.spawn();
 }
 
+/// `path:line` or `path:line:col` → (path, line); a path with no number gives "".
+pub fn split_line(s: &str) -> (&str, &str) {
+    let num = |x: &str| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit());
+    match s.rsplit_once(':') {
+        Some((a, b)) if num(b) => match a.rsplit_once(':') {
+            Some((p, l)) if num(l) => (p, l),
+            _ => (a, b),
+        },
+        _ => (s, ""),
+    }
+}
+
+/// A path as typed in text made absolute: `~` is the home folder, a relative path
+/// starts in the working folder.
+pub fn resolve(p: &str) -> PathBuf {
+    if p == "~" {
+        return PathBuf::from(home());
+    }
+    if let Some(r) = p.strip_prefix("~/") {
+        return PathBuf::from(home()).join(r);
+    }
+    let q = std::path::Path::new(p);
+    if q.is_absolute() {
+        q.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(q)
+    }
+}
+
+thread_local! {
+    // path → (exists, when checked); the screen is drawn many times a second
+    static SEEN: std::cell::RefCell<std::collections::HashMap<String, (bool, std::time::Instant)>> = std::cell::RefCell::new(Default::default());
+}
+
+/// Whether a path named in text exists. Answers are kept for 2 s, so a file the
+/// model has just written turns into a link within that time.
+pub fn exists(p: &str) -> bool {
+    let now = std::time::Instant::now();
+    SEEN.with(|m| {
+        let mut m = m.borrow_mut();
+        if let Some(&(e, t)) = m.get(p) {
+            if now.duration_since(t).as_secs() < 2 {
+                return e;
+            }
+        }
+        if m.len() > 4096 {
+            m.clear();
+        }
+        let e = resolve(p).exists();
+        m.insert(p.to_string(), (e, now));
+        e
+    })
+}
+
+/// Opens a folder in a new file manager window (on GNOME a new Files window, even
+/// when one is already open).
+pub fn open_dir(path: &str) {
+    let mut c = if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(path);
+        c
+    } else if cfg!(windows) {
+        let mut c = Command::new("explorer");
+        c.arg(path.replace('/', "\\"));
+        c
+    } else if let Some(n) = which("nautilus") {
+        let mut c = Command::new(n);
+        c.args(["--new-window", path]);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
+    let _ = c.spawn();
+}
+
 pub fn month() -> i32 {
     #[cfg(unix)]
     // SAFETY: `t` and `tm` are valid for the call; an all-zero libc::tm is a valid value, and
