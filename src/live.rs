@@ -1,3 +1,5 @@
+//! The default engine: a long-lived `claude` process spoken to over stream-json on stdin and stdout.
+
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -8,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
-pub struct Lv {
+pub(crate) struct Lv {
     inp: ChildStdin,
     rx: Receiver<Value>,
     ch: Child,
@@ -36,18 +38,30 @@ fn tsvc() -> String {
     std::env::var("NONAME_WORK_TOKEN").unwrap_or_else(|_| "ApolloClaw-konto-firma".into())
 }
 
-pub fn work_token() -> Option<String> {
+pub(crate) fn work_token() -> Option<String> {
     let s = tsvc();
     if cfg!(windows) {
         return None;
     }
     let o = if cfg!(target_os = "macos") {
-        Command::new("security").args(["find-generic-password", "-s", &s, "-w"]).stderr(Stdio::null()).output().ok()?
+        Command::new("security")
+            .args(["find-generic-password", "-s", &s, "-w"])
+            .stderr(Stdio::null())
+            .output()
+            .ok()?
     } else {
-        Command::new("secret-tool").args(["lookup", "service", &s]).stderr(Stdio::null()).output().ok()?
+        Command::new("secret-tool")
+            .args(["lookup", "service", &s])
+            .stderr(Stdio::null())
+            .output()
+            .ok()?
     };
     let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
-    if o.status.success() && !t.is_empty() { Some(t) } else { None }
+    if o.status.success() && !t.is_empty() {
+        Some(t)
+    } else {
+        None
+    }
 }
 
 fn tokenv(c: &mut Command) {
@@ -62,7 +76,7 @@ fn tokenv(c: &mut Command) {
     }
 }
 
-pub fn killall() {
+pub(crate) fn killall() {
     let ks = KIDS.lock().map(|k| k.clone()).unwrap_or_default();
     if cfg!(windows) {
         for k in &ks {
@@ -185,8 +199,8 @@ fn spawn(args: &[String]) -> io::Result<(Child, ChildStdin, Receiver<Value>)> {
         .stderr(Stdio::null())
         .spawn()?;
     track(&c);
-    let i = c.stdin.take().unwrap();
-    let rx = rd(c.stdout.take().unwrap());
+    let i = c.stdin.take().expect("stdin is piped above");
+    let rx = rd(c.stdout.take().expect("stdout is piped above"));
     Ok((c, i, rx))
 }
 
@@ -194,14 +208,28 @@ fn mnm(id: &str) -> String {
     let s = id.trim_start_matches("claude-");
     let s = s.split('[').next().unwrap_or(s);
     let ps: Vec<&str> = s.split('-').filter(|x| x.len() < 8).collect();
-    let nm: Vec<&str> = ps.iter().copied().filter(|x| !x.chars().all(|c| c.is_ascii_digit())).collect();
-    let vr: Vec<&str> = ps.iter().copied().filter(|x| x.chars().all(|c| c.is_ascii_digit())).collect();
-    if vr.is_empty() { nm.join(" ") } else { format!("{} {}", nm.join(" "), vr.join(".")) }
+    let nm: Vec<&str> = ps
+        .iter()
+        .copied()
+        .filter(|x| !x.chars().all(|c| c.is_ascii_digit()))
+        .collect();
+    let vr: Vec<&str> = ps
+        .iter()
+        .copied()
+        .filter(|x| x.chars().all(|c| c.is_ascii_digit()))
+        .collect();
+    if vr.is_empty() {
+        nm.join(" ")
+    } else {
+        format!("{} {}", nm.join(" "), vr.join("."))
+    }
 }
 
 fn rel(p: &str) -> String {
     let h = crate::sys::home();
-    let cwd = std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+    let cwd = std::env::current_dir()
+        .map(|d| d.to_string_lossy().to_string())
+        .unwrap_or_default();
     if let Some(r) = p.strip_prefix(&format!("{cwd}{}", std::path::MAIN_SEPARATOR)) {
         return r.to_string();
     }
@@ -215,7 +243,11 @@ fn rel(p: &str) -> String {
 
 fn one(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("").trim();
-    if l.chars().count() > n { l.chars().take(n).collect::<String>() + "…" } else { l.to_string() }
+    if l.chars().count() > n {
+        l.chars().take(n).collect::<String>() + "…"
+    } else {
+        l.to_string()
+    }
 }
 
 fn strip(s: &str) -> String {
@@ -258,7 +290,9 @@ impl App {
     }
 
     fn subtxt(&mut self, p: &str, s: &str) {
-        let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(p).copied()) else { return };
+        let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(p).copied()) else {
+            return;
+        };
         if let Some(B::Tl(t)) = self.bs.get_mut(i) {
             for l in s.lines().filter(|l| !l.trim().is_empty()) {
                 t.body.push(Ln::C(0, one(l, 200)));
@@ -297,12 +331,19 @@ impl App {
 
     /// Value of the model that `/model <q>` names: exact value, exact display name, or a unique-enough prefix/word such as "opus".
     fn pickmodel(&self, q: &str) -> Option<String> {
-        let nm = |s: &str| s.to_lowercase().replace(['-', '.'], " ").trim_start_matches("claude ").to_string();
+        let nm = |s: &str| {
+            s.to_lowercase()
+                .replace(['-', '.'], " ")
+                .trim_start_matches("claude ")
+                .to_string()
+        };
         let q = nm(q);
         if q.is_empty() {
             return None;
         }
-        let by = |f: &dyn Fn(&(String, String, String, Vec<String>)) -> bool| self.models.iter().find(|m| f(m)).map(|m| m.0.clone());
+        let by = |f: &dyn Fn(&ModelEntry) -> bool| {
+            self.models.iter().find(|m| f(m)).map(|m| m.0.clone())
+        };
         by(&|m| nm(&m.0) == q)
             .or_else(|| by(&|m| nm(&m.1) == q))
             .or_else(|| by(&|m| nm(&m.1).split(' ').next() == Some(q.as_str())))
@@ -310,7 +351,12 @@ impl App {
     }
 
     pub(crate) fn setmodel(&mut self, v: &str) {
-        let d = self.models.iter().find(|m| m.0 == v).map(|m| m.1.clone()).unwrap_or_else(|| mnm(v));
+        let d = self
+            .models
+            .iter()
+            .find(|m| m.0 == v)
+            .map(|m| m.1.clone())
+            .unwrap_or_else(|| mnm(v));
         if let Some(i) = MID_ALL.iter().position(|x| v.starts_with(x.0)) {
             self.model = i;
         }
@@ -330,7 +376,10 @@ impl App {
     pub(crate) fn seteffort(&mut self, v: &str) {
         self.effs = v.to_string();
         if self.lv.is_some() {
-            self.ctrl("eff", json!({"subtype": "apply_flag_settings", "settings": {"effortLevel": v}}));
+            self.ctrl(
+                "eff",
+                json!({"subtype": "apply_flag_settings", "settings": {"effortLevel": v}}),
+            );
         }
         self.toast(format!("effort  {v}"));
     }
@@ -339,13 +388,27 @@ impl App {
         if self.lv.is_none() {
             return;
         }
-        let st = self.pk.as_ref().and_then(|p| p.items.iter().find(|x| x.2 == name)).map(|x| x.1.clone()).unwrap_or_default();
+        let st = self
+            .pk
+            .as_ref()
+            .and_then(|p| p.items.iter().find(|x| x.2 == name))
+            .map(|x| x.1.clone())
+            .unwrap_or_default();
         if toggle {
             let en = st.starts_with("disabled");
-            self.ctrl("mct", json!({"subtype": "mcp_toggle", "serverName": name, "enabled": en}));
-            self.toast(format!("{}  {name}", if en { "enabling" } else { "disabling" }));
+            self.ctrl(
+                "mct",
+                json!({"subtype": "mcp_toggle", "serverName": name, "enabled": en}),
+            );
+            self.toast(format!(
+                "{}  {name}",
+                if en { "enabling" } else { "disabling" }
+            ));
         } else {
-            self.ctrl("mcr", json!({"subtype": "mcp_reconnect", "serverName": name}));
+            self.ctrl(
+                "mcr",
+                json!({"subtype": "mcp_reconnect", "serverName": name}),
+            );
             self.toast(format!("reconnecting  {name}"));
         }
     }
@@ -356,7 +419,10 @@ impl App {
             return;
         }
         let id = t.id.clone();
-        self.ctrl(&format!("tko{i}"), json!({"subtype": "get_task_output", "task_id": id}));
+        self.ctrl(
+            &format!("tko{i}"),
+            json!({"subtype": "get_task_output", "task_id": id}),
+        );
     }
 
     pub(crate) fn tstop(&mut self, i: usize) {
@@ -388,14 +454,26 @@ fn sv(v: &Value, k: &str) -> String {
 fn mk(name: &str, i: &Value) -> Tool {
     let (k, nm) = match name {
         "Read" | "NotebookRead" => (Tk::Read, "read".to_string()),
-        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => (Tk::Edit, if name == "Write" { "write".into() } else { "edit".into() }),
+        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => (
+            Tk::Edit,
+            if name == "Write" {
+                "write".into()
+            } else {
+                "edit".into()
+            },
+        ),
         "Bash" | "Monitor" => (Tk::Bash, "bash".into()),
         "Grep" | "Glob" | "LSP" => (Tk::Grep, name.to_lowercase()),
         "WebSearch" | "WebFetch" => (Tk::Web, "web".into()),
         "Task" | "Agent" | "Workflow" => (Tk::Task, "agent".into()),
         n if n.starts_with("mcp__") => {
             let p: Vec<&str> = n.split("__").collect();
-            (Tk::Oth, p.get(1).map(|x| x.trim_start_matches("claude_ai_").to_lowercase()).unwrap_or_else(|| "mcp".into()))
+            (
+                Tk::Oth,
+                p.get(1)
+                    .map(|x| x.trim_start_matches("claude_ai_").to_lowercase())
+                    .unwrap_or_else(|| "mcp".into()),
+            )
         }
         n => (Tk::Oth, n.to_lowercase()),
     };
@@ -406,7 +484,11 @@ fn mk(name: &str, i: &Value) -> Tool {
         "Monitor" => one(&sv(i, "description"), 140),
         "Grep" => {
             let p = sv(i, "path");
-            if p.is_empty() { sv(i, "pattern") } else { format!("{}  {}", sv(i, "pattern"), rel(&p)) }
+            if p.is_empty() {
+                sv(i, "pattern")
+            } else {
+                format!("{}  {}", sv(i, "pattern"), rel(&p))
+            }
         }
         "Glob" => sv(i, "pattern"),
         "WebSearch" => sv(i, "query"),
@@ -414,13 +496,21 @@ fn mk(name: &str, i: &Value) -> Tool {
         "Task" | "Agent" => {
             let ty = sv(i, "subagent_type").to_lowercase();
             let d = sv(i, "description");
-            if ty.is_empty() || ty == "general-purpose" { d } else { format!("{ty}: {d}") }
+            if ty.is_empty() || ty == "general-purpose" {
+                d
+            } else {
+                format!("{ty}: {d}")
+            }
         }
         "Skill" => sv(i, "skill"),
         "TodoWrite" => "todos".into(),
         _ => {
             let s = i.to_string();
-            if s == "{}" || s == "null" { String::new() } else { one(&s, 90) }
+            if s == "{}" || s == "null" {
+                String::new()
+            } else {
+                one(&s, 90)
+            }
         }
     };
     let mut body = vec![];
@@ -434,7 +524,12 @@ fn mk(name: &str, i: &Value) -> Tool {
             }
         }
         "MultiEdit" => {
-            for e in i.get("edits").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
+            for e in i
+                .get("edits")
+                .and_then(|x| x.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
                 for l in sv(&e, "old_string").lines() {
                     body.push(Ln::D(0, l.into()));
                 }
@@ -457,12 +552,25 @@ fn mk(name: &str, i: &Value) -> Tool {
     } else {
         String::new()
     };
-    Tool { k, nm, a, sum, body, st: St::Run, t0: 0, t1: 0 }
+    Tool {
+        k,
+        nm,
+        a,
+        sum,
+        body,
+        st: St::Run,
+        t0: 0,
+        t1: 0,
+    }
 }
 
 fn pdir(cwd: &str) -> String {
-    let base = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{}/.claude", crate::sys::home()));
-    let esc: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let base = std::env::var("CLAUDE_CONFIG_DIR")
+        .unwrap_or_else(|_| format!("{}/.claude", crate::sys::home()));
+    let esc: String = cwd
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
     format!("{base}/projects/{esc}")
 }
 
@@ -471,7 +579,12 @@ fn newest(cwd: &str) -> Option<String> {
         .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path().file_stem()?.to_string_lossy().to_string())))
+        .filter_map(|e| {
+            Some((
+                e.metadata().ok()?.modified().ok()?,
+                e.path().file_stem()?.to_string_lossy().to_string(),
+            ))
+        })
         .collect();
     v.sort();
     v.pop().map(|x| x.1)
@@ -480,7 +593,11 @@ fn newest(cwd: &str) -> Option<String> {
 fn rtext(c: &Value) -> String {
     match c.get("content") {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(a)) => a.iter().filter_map(|x| x.get("text").and_then(|t| t.as_str())).collect::<Vec<_>>().join("\n"),
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|x| x.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
         _ => String::new(),
     }
 }
@@ -498,24 +615,69 @@ impl App {
         a.cwd = rel(&std::env::current_dir()?.to_string_lossy());
         a.wk = work_token().map(|_| ());
         a.work = TOK.lock().ok().is_some_and(|t| t.is_some());
-        a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
-        a.br = Command::new("git").args(["branch", "--show-current"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        a.bgw = std::fs::read_to_string(crate::bgfile())
+            .ok()
+            .and_then(|x| crate::bg::canon(&x))
+            .filter(|k| crate::bg::exists(k));
+        a.br = Command::new("git")
+            .args(["branch", "--show-current"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
         let mut args = args;
-        if !args.iter().any(|x| x.starts_with("--permission-mode") || x == "--dangerously-skip-permissions") {
+        if !args
+            .iter()
+            .any(|x| x.starts_with("--permission-mode") || x == "--dangerously-skip-permissions")
+        {
             if let Some(i) = crate::defmode().filter(|i| *i > 0) {
                 args.extend(["--permission-mode".into(), PM[i].into()]);
                 a.mode = i;
             }
         }
-        if !args.iter().any(|x| x == "--effort" || x.starts_with("--effort=")) {
+        if !args
+            .iter()
+            .any(|x| x == "--effort" || x.starts_with("--effort="))
+        {
             if let Some(e) = crate::defeff() {
                 args.extend(["--effort".into(), e.into()]);
                 a.effs = e.into();
             }
         }
-        let (ch, inp, rx) = spawn(&args).map_err(|e| if e.kind() == io::ErrorKind::NotFound { io::Error::new(e.kind(), "claude not found, install Claude Code first: https://claude.com/claude-code") } else { e })?;
-        a.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), sm: HashMap::new(), bm: HashMap::new(), areq: None, sid: String::new(), args, brx: None, bch: None, tb: 0, uid: HashMap::new(), rwp: None, c0: 0.0, w0: 0.0, cmds: vec![] });
-        a.ctrl("init", json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}));
+        let (ch, inp, rx) = spawn(&args).map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                io::Error::new(
+                    e.kind(),
+                    "claude not found, install Claude Code first: https://claude.com/claude-code",
+                )
+            } else {
+                e
+            }
+        })?;
+        a.lv = Some(Lv {
+            inp,
+            rx,
+            ch,
+            rid: 0,
+            tm: HashMap::new(),
+            sm: HashMap::new(),
+            bm: HashMap::new(),
+            areq: None,
+            sid: String::new(),
+            args,
+            brx: None,
+            bch: None,
+            tb: 0,
+            uid: HashMap::new(),
+            rwp: None,
+            c0: 0.0,
+            w0: 0.0,
+            cmds: vec![],
+        });
+        a.ctrl(
+            "init",
+            json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}),
+        );
         let ar = a.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
         let rid = if let Some(i) = ar.iter().position(|x| x == "-r" || x == "--resume") {
@@ -539,18 +701,47 @@ impl App {
     pub fn cmds(&self) -> Vec<(String, String)> {
         let mut v = match &self.lv {
             Some(l) if !l.cmds.is_empty() => l.cmds.clone(),
-            _ if self.is_codex() => vec![("clear".to_string(), format!("start a new {} thread", self.eng()))],
-            _ => CMDS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+            _ if self.is_codex() => vec![(
+                "clear".to_string(),
+                format!("start a new {} thread", self.eng()),
+            )],
+            _ => CMDS
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
         };
         v.retain(|x| x.0 != "theme");
         v.push(("noname".into(), "noname settings".into()));
-        v.push(("default-permission".into(), "permission mode new sessions start in".into()));
-        v.push(("theme".into(), crate::pal::all().iter().map(|t| t.name).collect::<Vec<_>>().join(" ")));
+        v.push((
+            "default-permission".into(),
+            "permission mode new sessions start in".into(),
+        ));
+        v.push((
+            "theme".into(),
+            crate::pal::all()
+                .iter()
+                .map(|t| t.name)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
         v.push(("background".into(), crate::bg::LIST.into()));
-        v.push(("resume".into(), "pick an older session in this folder".into()));
+        v.push((
+            "resume".into(),
+            "pick an older session in this folder".into(),
+        ));
         v.retain(|x| x.0 != "copy");
-        v.push(("copy".into(), "copy the last answer  ·  /copy code for the last code block".into()));
-        for (c, d) in [("model", "pick a model"), ("effort", "pick the effort level"), ("tasks", "background shells, monitors, agents and workflows"), ("mcp", "mcp servers: reconnect, enable or disable"), ("diff", "all changes in this workspace"), ("rename", "name this session")] {
+        v.push((
+            "copy".into(),
+            "copy the last answer  ·  /copy code for the last code block".into(),
+        ));
+        for (c, d) in [
+            ("model", "pick a model"),
+            ("effort", "pick the effort level"),
+            ("tasks", "background shells, monitors, agents and workflows"),
+            ("mcp", "mcp servers: reconnect, enable or disable"),
+            ("diff", "all changes in this workspace"),
+            ("rename", "name this session"),
+        ] {
             if self.lv.is_some() || matches!(c, "model" | "effort" | "tasks") {
                 v.retain(|x| x.0 != c);
                 v.push((c.into(), d.into()));
@@ -558,13 +749,20 @@ impl App {
         }
         if self.swok() {
             v.retain(|x| x.0 != "apolloclaw:switch");
-            v.push(("switch".into(), "switch between personal and work account".into()));
+            v.push((
+                "switch".into(),
+                "switch between personal and work account".into(),
+            ));
         }
         v
     }
 
     fn swok(&self) -> bool {
-        self.wk.is_some() && self.lv.as_ref().is_some_and(|l| l.cmds.iter().any(|c| c.0 == "apolloclaw:switch"))
+        self.wk.is_some()
+            && self
+                .lv
+                .as_ref()
+                .is_some_and(|l| l.cmds.iter().any(|c| c.0 == "apolloclaw:switch"))
     }
 
     pub fn is_live(&self) -> bool {
@@ -613,7 +811,19 @@ impl App {
         match c {
             "btw" if !arg.trim().is_empty() => self.lbtw(arg.trim()),
             "clear" | "new" => {
-                let args: Vec<String> = self.lv.as_ref().map(|l| l.args.iter().filter(|x| !matches!(x.as_str(), "-c" | "--continue" | "-r" | "--resume")).cloned().collect()).unwrap_or_default();
+                let args: Vec<String> = self
+                    .lv
+                    .as_ref()
+                    .map(|l| {
+                        l.args
+                            .iter()
+                            .filter(|x| {
+                                !matches!(x.as_str(), "-c" | "--continue" | "-r" | "--resume")
+                            })
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 if let Ok(mut n) = App::live(args) {
                     n.tc = self.t;
                     n.t = self.t;
@@ -632,15 +842,26 @@ impl App {
             "effort" => self.seteffort(arg.trim()),
             "mcp" if arg.is_empty() => {
                 self.ctrl("mcs", json!({"subtype": "mcp_status"}));
-                self.pk = Some(Pk { kind: 2, title: "mcp".into(), ..Default::default() });
+                self.pk = Some(Pk {
+                    kind: 2,
+                    title: "mcp".into(),
+                    ..Default::default()
+                });
             }
             "diff" if arg.is_empty() => {
                 self.ctrl("dif", json!({"subtype": "get_workspace_diff"}));
-                self.pk = Some(Pk { kind: 3, title: "diff".into(), ..Default::default() });
+                self.pk = Some(Pk {
+                    kind: 3,
+                    title: "diff".into(),
+                    ..Default::default()
+                });
             }
             "rename" if !arg.trim().is_empty() => {
                 let t = arg.trim().to_string();
-                self.ctrl("ren", json!({"subtype": "rename_session", "title": t, "source": "host"}));
+                self.ctrl(
+                    "ren",
+                    json!({"subtype": "rename_session", "title": t, "source": "host"}),
+                );
                 self.stitle = t;
             }
             "quit" | "exit" => self.quit = true,
@@ -674,12 +895,25 @@ impl App {
     fn lbtw(&mut self, q: &str) {
         let sid = self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default();
         let mut c = Command::new(crate::sys::bin("claude"));
-        c.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--tools", ""]);
+        c.args([
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--no-session-persistence",
+            "--tools",
+            "",
+        ]);
         if !sid.is_empty() {
             c.args(["--resume", &sid, "--fork-session"]);
         }
-        c.arg(format!("Side question, answer briefly in 1-3 sentences without tools: {q}"));
-        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        c.arg(format!(
+            "Side question, answer briefly in 1-3 sentences without tools: {q}"
+        ));
+        c.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         tokenv(&mut c);
         guard(&mut c);
         let Ok(mut ch) = c.spawn() else {
@@ -687,7 +921,7 @@ impl App {
             return;
         };
         track(&ch);
-        let rx = rd(ch.stdout.take().unwrap());
+        let rx = rd(ch.stdout.take().expect("stdout is piped above"));
         if let Some(l) = &mut self.lv {
             if let Some(mut o) = l.bch.take() {
                 reap(&mut o);
@@ -695,13 +929,22 @@ impl App {
             l.brx = Some(rx);
             l.bch = Some(ch);
         }
-        self.btw = Some(Btw { q: q.into(), a: String::new(), full: String::new(), fin: false });
+        self.btw = Some(Btw {
+            q: q.into(),
+            a: String::new(),
+            full: String::new(),
+            fin: false,
+        });
     }
 
     pub fn sessions(&self) -> Vec<(String, String, String)> {
-        let cwd = std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+        let cwd = std::env::current_dir()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default();
         let cur = self.lv.as_ref().map(|l| l.sid.clone()).unwrap_or_default();
-        let Ok(rd) = std::fs::read_dir(pdir(&cwd)) else { return vec![] };
+        let Ok(rd) = std::fs::read_dir(pdir(&cwd)) else {
+            return vec![];
+        };
         let now = std::time::SystemTime::now();
         let mut v: Vec<(std::time::SystemTime, String, String, String)> = vec![];
         for e in rd.flatten() {
@@ -709,19 +952,38 @@ impl App {
             if p.extension().is_none_or(|x| x != "jsonl") {
                 continue;
             }
-            let id = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+            let id = p
+                .file_stem()
+                .map(|x| x.to_string_lossy().to_string())
+                .unwrap_or_default();
             if id == cur {
                 continue;
             }
-            let Ok(m) = e.metadata().and_then(|m| m.modified()) else { continue };
-            let Ok(f) = std::fs::read_to_string(&p) else { continue };
-            let (mut first, mut ct, mut at, mut sm, mut br) = (String::new(), String::new(), String::new(), String::new(), String::new());
+            let Ok(m) = e.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            let Ok(f) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let (mut first, mut ct, mut at, mut sm, mut br) = (
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            );
             let mut n = 0usize;
             for l in f.lines() {
-                if !(l.contains("\"type\":\"user\"") || l.contains("\"type\":\"assistant\"") || l.contains("title\"") || l.contains("\"summary\"")) {
+                if !(l.contains("\"type\":\"user\"")
+                    || l.contains("\"type\":\"assistant\"")
+                    || l.contains("title\"")
+                    || l.contains("\"summary\""))
+                {
                     continue;
                 }
-                let Ok(o) = serde_json::from_str::<Value>(l) else { continue };
+                let Ok(o) = serde_json::from_str::<Value>(l) else {
+                    continue;
+                };
                 match o["type"].as_str().unwrap_or("") {
                     "custom-title" => ct = sv(&o, "customTitle"),
                     "ai-title" => at = sv(&o, "aiTitle"),
@@ -731,7 +993,12 @@ impl App {
                         let c = &o["message"]["content"];
                         let t = match c {
                             Value::String(t) => t.clone(),
-                            Value::Array(a) => a.iter().filter(|x| x["type"] == "text").filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join(" "),
+                            Value::Array(a) => a
+                                .iter()
+                                .filter(|x| x["type"] == "text")
+                                .filter_map(|x| x["text"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "),
                             _ => String::new(),
                         };
                         if t.is_empty() || t.starts_with('<') || t.starts_with("[Request") {
@@ -749,20 +1016,34 @@ impl App {
                     _ => {}
                 }
             }
-            let title = [ct, at, sm, first].into_iter().find(|x| !x.trim().is_empty()).unwrap_or_default();
+            let title = [ct, at, sm, first]
+                .into_iter()
+                .find(|x| !x.trim().is_empty())
+                .unwrap_or_default();
             if title.is_empty() {
                 continue;
             }
             let s = now.duration_since(m).map(|d| d.as_secs()).unwrap_or(0);
-            let age = if s < 60 { "just now".to_string() } else if s < 3600 { format!("{}m ago", s / 60) } else if s < 86400 { format!("{}h ago", s / 3600) } else { format!("{}d ago", s / 86400) };
+            let age = if s < 60 {
+                "just now".to_string()
+            } else if s < 3600 {
+                format!("{}m ago", s / 60)
+            } else if s < 86400 {
+                format!("{}h ago", s / 3600)
+            } else {
+                format!("{}d ago", s / 86400)
+            };
             let mut meta = format!("{age}  ·  {n} messages");
             if !br.is_empty() {
                 meta += &format!("  ·  {br}");
             }
             v.push((m, id, one(&title, 120), meta));
         }
-        v.sort_by(|a, b| b.0.cmp(&a.0));
-        v.into_iter().take(50).map(|(_, id, t, m)| (id, t, m)).collect()
+        v.sort_by_key(|a| std::cmp::Reverse(a.0));
+        v.into_iter()
+            .take(50)
+            .map(|(_, id, t, m)| (id, t, m))
+            .collect()
     }
 
     pub(crate) fn lswitch(&mut self) {
@@ -771,7 +1052,8 @@ impl App {
             match work_token() {
                 Some(t) => Some(t),
                 None => {
-                    self.bs.push(B::Sys(format!("no work token in the keyring ({})", tsvc())));
+                    self.bs
+                        .push(B::Sys(format!("no work token in the keyring ({})", tsvc())));
                     return;
                 }
             }
@@ -790,7 +1072,11 @@ impl App {
             self.lresume(&sid);
             self.work = to_work;
         }
-        self.toast(if to_work { "account  work" } else { "account  personal" });
+        self.toast(if to_work {
+            "account  work"
+        } else {
+            "account  personal"
+        });
     }
 
     pub(crate) fn lresume(&mut self, id: &str) {
@@ -860,7 +1146,9 @@ impl App {
                     self.tm = self.t.max(1);
                     json!({"behavior": "allow", "updatedInput": q.inp, "updatedPermissions": [{"type": "setMode", "mode": PM[i], "destination": "session"}]})
                 }
-                _ if ok && a != "no, keep planning" => json!({"behavior": "deny", "message": format!("The user wants to keep planning: {a}")}),
+                _ if ok && a != "no, keep planning" => {
+                    json!({"behavior": "deny", "message": format!("The user wants to keep planning: {a}")})
+                }
                 _ => json!({"behavior": "deny", "message": "The user wants to keep planning."}),
             };
             self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": q.id, "response": r}}));
@@ -868,7 +1156,8 @@ impl App {
         }
         let r = if ok {
             let mut inp = q.inp.clone();
-            let m: serde_json::Map<String, Value> = q.ans.iter().map(|(a, b)| (a.clone(), json!(b))).collect();
+            let m: serde_json::Map<String, Value> =
+                q.ans.iter().map(|(a, b)| (a.clone(), json!(b))).collect();
             inp["answers"] = Value::Object(m);
             json!({"behavior": "allow", "updatedInput": inp})
         } else {
@@ -882,7 +1171,9 @@ impl App {
         if let B::Ask(a) = &mut self.bs[i] {
             a.ans = Some(c);
         }
-        let Some((id, inp, sug)) = self.lv.as_mut().and_then(|l| l.areq.take()) else { return };
+        let Some((id, inp, sug)) = self.lv.as_mut().and_then(|l| l.areq.take()) else {
+            return;
+        };
         let r = match c {
             'n' => json!({"behavior": "deny", "message": "The user denied this action."}),
             'a' => json!({"behavior": "allow", "updatedInput": inp, "updatedPermissions": sug}),
@@ -941,7 +1232,11 @@ impl App {
                 p = r;
             }
             if e["type"] == "assistant" {
-                for c in e["message"]["content"].as_array().cloned().unwrap_or_default() {
+                for c in e["message"]["content"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     match c["type"].as_str().unwrap_or("") {
                         "tool_use" => {
                             let n = sv(&c, "name");
@@ -965,7 +1260,12 @@ impl App {
             "system" => match e["subtype"].as_str().unwrap_or("") {
                 "init" => {
                     let sid = sv(&e, "session_id");
-                    let rs = self.lv.as_ref().is_some_and(|l| l.sid.is_empty() && l.args.iter().any(|x| matches!(x.as_str(), "-c" | "--continue" | "-r" | "--resume")));
+                    let rs = self.lv.as_ref().is_some_and(|l| {
+                        l.sid.is_empty()
+                            && l.args.iter().any(|x| {
+                                matches!(x.as_str(), "-c" | "--continue" | "-r" | "--resume")
+                            })
+                    });
                     if let Some(l) = &mut self.lv {
                         l.sid = sid.clone();
                     }
@@ -990,8 +1290,17 @@ impl App {
                     }
                 }
                 "api_retry" | "api_error" => {
-                    let (at, mx) = (e["attempt"].as_u64().or(e["retry_attempt"].as_u64()).unwrap_or(0), e["max_retries"].as_u64().unwrap_or(0));
-                    let ms = e["retry_delay_ms"].as_u64().or(e["retry_in_ms"].as_u64()).unwrap_or(0);
+                    let (at, mx) = (
+                        e["attempt"]
+                            .as_u64()
+                            .or(e["retry_attempt"].as_u64())
+                            .unwrap_or(0),
+                        e["max_retries"].as_u64().unwrap_or(0),
+                    );
+                    let ms = e["retry_delay_ms"]
+                        .as_u64()
+                        .or(e["retry_in_ms"].as_u64())
+                        .unwrap_or(0);
                     let st = e["error_status"].as_u64().or(e["error"]["status"].as_u64());
                     let why = match st {
                         Some(429) => "rate limited".to_string(),
@@ -999,12 +1308,23 @@ impl App {
                         Some(s) => format!("error {s}"),
                         None => "connection error".to_string(),
                     };
-                    self.retry = Some((format!("{why}  ·  attempt {at}/{mx}"), self.t + ms * 30 / 1000));
+                    self.retry = Some((
+                        format!("{why}  ·  attempt {at}/{mx}"),
+                        self.t + ms * 30 / 1000,
+                    ));
                 }
                 "model_fallback" => {
                     let c = sv(&e, "content");
                     let f = sv(&e, "fallback_model");
-                    self.bs.push(B::Sys(if c.is_empty() { format!("switched to {} ({})", mnm(&f), sv(&e, "trigger").replace('_', " ")) } else { one(&c, 200) }));
+                    self.bs.push(B::Sys(if c.is_empty() {
+                        format!(
+                            "switched to {} ({})",
+                            mnm(&f),
+                            sv(&e, "trigger").replace('_', " ")
+                        )
+                    } else {
+                        one(&c, 200)
+                    }));
                 }
                 "notification" => {
                     let t = sv(&e, "text");
@@ -1015,7 +1335,15 @@ impl App {
                 "permission_denied" => {
                     let r = sv(&e, "decision_reason_type");
                     let t = mk(&sv(&e, "tool_name"), &Value::Null);
-                    self.bs.push(B::Sys(format!("{} denied{}", t.nm, if r.is_empty() { String::new() } else { format!(" by {r}") })));
+                    self.bs.push(B::Sys(format!(
+                        "{} denied{}",
+                        t.nm,
+                        if r.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" by {r}")
+                        }
+                    )));
                 }
                 "session_title_changed" => self.stitle = one(&sv(&e, "title"), 80),
                 "hook_started" => {
@@ -1030,14 +1358,36 @@ impl App {
                     let code = e["exit_code"].as_i64().unwrap_or(0);
                     if sv(&e, "outcome") == "error" || code == 2 {
                         let er = strip(&sv(&e, "stderr"));
-                        let er = er.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
-                        self.bs.push(B::Sys(format!("hook {} {}{}", sv(&e, "hook_event"), if code == 2 { "blocked" } else { "failed" }, if er.is_empty() { String::new() } else { format!(": {}", one(&er, 120)) })));
+                        let er = er
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("")
+                            .to_string();
+                        self.bs.push(B::Sys(format!(
+                            "hook {} {}{}",
+                            sv(&e, "hook_event"),
+                            if code == 2 { "blocked" } else { "failed" },
+                            if er.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {}", one(&er, 120))
+                            }
+                        )));
                     }
                 }
                 "stop_hook_summary" => {
-                    let errs: Vec<String> = e["hook_errors"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(|s| one(s, 120))).collect();
+                    let errs: Vec<String> = e["hook_errors"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| one(s, 120)))
+                        .collect();
                     if e["prevented_continuation"] == true {
-                        self.bs.push(B::Sys(format!("stop hook kept going{}", errs.first().map(|x| format!(": {x}")).unwrap_or_default())));
+                        self.bs.push(B::Sys(format!(
+                            "stop hook kept going{}",
+                            errs.first().map(|x| format!(": {x}")).unwrap_or_default()
+                        )));
                     } else if let Some(x) = errs.first() {
                         self.bs.push(B::Sys(format!("stop hook error: {x}")));
                     }
@@ -1063,7 +1413,15 @@ impl App {
                             t.desc = desc;
                             t.st = 0;
                         }
-                        None => self.tasks.push(Task { id, kind, desc: one(&desc, 200), t0: now, tool, name: one(&name, 60), ..Default::default() }),
+                        None => self.tasks.push(Task {
+                            id,
+                            kind,
+                            desc: one(&desc, 200),
+                            t0: now,
+                            tool,
+                            name: one(&name, 60),
+                            ..Default::default()
+                        }),
                     }
                 }
                 "task_progress" => {
@@ -1079,7 +1437,11 @@ impl App {
                         t.tools = e["usage"]["tool_uses"].as_u64().unwrap_or(t.tools);
                         t.toks = e["usage"]["total_tokens"].as_u64().unwrap_or(t.toks);
                         let mut ph = String::new();
-                        for r in e["workflow_progress"].as_array().map(|v| v.as_slice()).unwrap_or(&[]) {
+                        for r in e["workflow_progress"]
+                            .as_array()
+                            .map(|v| v.as_slice())
+                            .unwrap_or(&[])
+                        {
                             if r["type"] != "workflow_agent" {
                                 continue;
                             }
@@ -1104,7 +1466,11 @@ impl App {
                 }
                 "task_updated" | "task_notification" => {
                     let id = sv(&e, "task_id");
-                    let st = if e["subtype"] == "task_updated" { sv(&e["patch"], "status") } else { sv(&e, "status") };
+                    let st = if e["subtype"] == "task_updated" {
+                        sv(&e["patch"], "status")
+                    } else {
+                        sv(&e, "status")
+                    };
                     let now = self.t.max(1);
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                         let n = match st.as_str() {
@@ -1143,7 +1509,11 @@ impl App {
                     }
                     self.mname = mnm(&m);
                 }
-                for c in e["message"]["content"].as_array().cloned().unwrap_or_default() {
+                for c in e["message"]["content"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     if c["type"] == "tool_use" {
                         self.tuse(&c);
                     }
@@ -1151,7 +1521,9 @@ impl App {
             }
             "user" => {
                 let c = &e["message"]["content"];
-                let txt = c.is_string() || c.as_array().is_some_and(|a| a.iter().any(|x| x["type"] == "text"));
+                let txt = c.is_string()
+                    || c.as_array()
+                        .is_some_and(|a| a.iter().any(|x| x["type"] == "text"));
                 if txt {
                     let u = sv(&e, "uuid");
                     if !u.is_empty() {
@@ -1181,7 +1553,13 @@ impl App {
                         .map(|x| Qq {
                             q: sv(x, "question"),
                             h: sv(x, "header"),
-                            opts: x["options"].as_array().cloned().unwrap_or_default().iter().map(|o| (sv(o, "label"), sv(o, "description"))).collect(),
+                            opts: x["options"]
+                                .as_array()
+                                .cloned()
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|o| (sv(o, "label"), sv(o, "description")))
+                                .collect(),
                             multi: x["multiSelect"] == true,
                         })
                         .collect();
@@ -1190,7 +1568,16 @@ impl App {
                         self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {"behavior": "allow", "updatedInput": r["input"].clone()}}}));
                     } else {
                         let n = qs[0].opts.len();
-                        self.qa = Some(Qa { id, inp: r["input"].clone(), qs, i: 0, sel: 0, pick: vec![false; n], ans: vec![], plan: false });
+                        self.qa = Some(Qa {
+                            id,
+                            inp: r["input"].clone(),
+                            qs,
+                            i: 0,
+                            sel: 0,
+                            pick: vec![false; n],
+                            ans: vec![],
+                            plan: false,
+                        });
                     }
                 } else if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "ExitPlanMode" {
                     let plan = sv(&r["input"], "plan");
@@ -1198,21 +1585,55 @@ impl App {
                         self.bs.push(B::T(plan.trim().to_string()));
                     }
                     let opts = vec![
-                        ("yes, auto mode".to_string(), "Claude works on its own, the classifier checks risky steps".to_string()),
-                        ("yes, approve edits".to_string(), "you approve each edit and command".to_string()),
-                        ("yes, bypass permissions".to_string(), "no questions at all".to_string()),
+                        (
+                            "yes, auto mode".to_string(),
+                            "Claude works on its own, the classifier checks risky steps"
+                                .to_string(),
+                        ),
+                        (
+                            "yes, approve edits".to_string(),
+                            "you approve each edit and command".to_string(),
+                        ),
+                        (
+                            "yes, bypass permissions".to_string(),
+                            "no questions at all".to_string(),
+                        ),
                         ("no, keep planning".to_string(), String::new()),
                     ];
                     let id = sv(&e, "request_id");
-                    self.qa = Some(Qa { id, inp: r["input"].clone(), qs: vec![Qq { q: "Ready to code?".into(), h: "plan".into(), opts, multi: false }], i: 0, sel: 0, pick: vec![false; 4], ans: vec![], plan: true });
+                    self.qa = Some(Qa {
+                        id,
+                        inp: r["input"].clone(),
+                        qs: vec![Qq {
+                            q: "Ready to code?".into(),
+                            h: "plan".into(),
+                            opts,
+                            multi: false,
+                        }],
+                        i: 0,
+                        sel: 0,
+                        pick: vec![false; 4],
+                        ans: vec![],
+                        plan: true,
+                    });
                 } else if r["subtype"] == "can_use_tool" {
                     let name = sv(r, "tool_name");
                     let t = mk(&name, &r["input"]);
-                    let cmd = if t.a.is_empty() { t.nm.clone() } else { format!("{}  {}", t.nm, t.a) };
+                    let cmd = if t.a.is_empty() {
+                        t.nm.clone()
+                    } else {
+                        format!("{}  {}", t.nm, t.a)
+                    };
                     self.bs.push(B::Ask(Ask { cmd, ans: None }));
                     self.ask = Some(self.bs.len() - 1);
                     if let Some(l) = &mut self.lv {
-                        l.areq = Some((sv(&e, "request_id"), r["input"].clone(), r.get("permission_suggestions").cloned().unwrap_or(json!([]))));
+                        l.areq = Some((
+                            sv(&e, "request_id"),
+                            r["input"].clone(),
+                            r.get("permission_suggestions")
+                                .cloned()
+                                .unwrap_or(json!([])),
+                        ));
                     }
                 } else {
                     let id = sv(&e, "request_id");
@@ -1225,22 +1646,57 @@ impl App {
                 let p = &r["response"];
                 if id.starts_with("init") {
                     if let (Some(l), Some(cs)) = (&mut self.lv, p["commands"].as_array()) {
-                        l.cmds = cs.iter().map(|c| (sv(c, "name"), one(&sv(c, "description"), 60))).collect();
+                        l.cmds = cs
+                            .iter()
+                            .map(|c| (sv(c, "name"), one(&sv(c, "description"), 60)))
+                            .collect();
                     }
                     let ar = self.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
-                    let want = ar.iter().position(|x| x == "--model").and_then(|i| ar.get(i + 1)).cloned().unwrap_or_else(|| "default".into());
+                    let want = ar
+                        .iter()
+                        .position(|x| x == "--model")
+                        .and_then(|i| ar.get(i + 1))
+                        .cloned()
+                        .unwrap_or_else(|| "default".into());
                     if let Some(ms) = p["models"].as_array() {
-                        let v: Vec<(String, String, String, Vec<String>)> = ms.iter().filter(|m| m["disabled"] != true).map(|m| (sv(m, "value"), sv(m, "displayName"), sv(m, "description"), m["supportedEffortLevels"].as_array().cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(str::to_string)).collect())).collect();
+                        let v: Vec<(String, String, String, Vec<String>)> = ms
+                            .iter()
+                            .filter(|m| m["disabled"] != true)
+                            .map(|m| {
+                                (
+                                    sv(m, "value"),
+                                    sv(m, "displayName"),
+                                    sv(m, "description"),
+                                    m["supportedEffortLevels"]
+                                        .as_array()
+                                        .cloned()
+                                        .unwrap_or_default()
+                                        .iter()
+                                        .filter_map(|x| x.as_str().map(str::to_string))
+                                        .collect(),
+                                )
+                            })
+                            .collect();
                         if !v.is_empty() {
                             let mut v = v;
                             for (id, d) in MID_ALL.iter() {
                                 if !v.iter().any(|m| m.0 == *id || m.1 == *d) {
-                                    v.push((id.to_string(), d.to_string(), String::new(), EFF.iter().map(|x| x.to_string()).collect()));
+                                    v.push((
+                                        id.to_string(),
+                                        d.to_string(),
+                                        String::new(),
+                                        EFF.iter().map(|x| x.to_string()).collect(),
+                                    ));
                                 }
                             }
                             self.models = v;
                         }
-                        let m = ms.iter().find(|m| sv(m, "value") == want).map(|m| sv(m, "resolvedModel")).filter(|x| !x.is_empty()).unwrap_or(want.clone());
+                        let m = ms
+                            .iter()
+                            .find(|m| sv(m, "value") == want)
+                            .map(|m| sv(m, "resolvedModel"))
+                            .filter(|x| !x.is_empty())
+                            .unwrap_or(want.clone());
                         if self.mname == "…" {
                             self.mname = mnm(&m);
                             if let Some(i) = MID_ALL.iter().position(|x| m.starts_with(x.0)) {
@@ -1269,10 +1725,15 @@ impl App {
                         self.mname = mnm(&m);
                     }
                 } else if id.starts_with("rwf") {
-                    let n = p["filesChanged"].as_array().map(|x| x.len()).or_else(|| p["files_changed"].as_array().map(|x| x.len()));
+                    let n = p["filesChanged"]
+                        .as_array()
+                        .map(|x| x.len())
+                        .or_else(|| p["files_changed"].as_array().map(|x| x.len()));
                     match n {
                         Some(n) => self.toast(format!("restored {n} files")),
-                        None if r["subtype"] == "error" => self.toast(format!("files not restored  {}", one(&sv(r, "error"), 40))),
+                        None if r["subtype"] == "error" => {
+                            self.toast(format!("files not restored  {}", one(&sv(r, "error"), 40)))
+                        }
                         None => self.toast("files restored"),
                     }
                     if let Some((i, conv)) = self.lv.as_mut().and_then(|l| l.rwp.take()) {
@@ -1281,22 +1742,54 @@ impl App {
                         }
                     }
                 } else if let Some(r) = id.strip_prefix("tko") {
-                    let i: usize = r.split('-').next().and_then(|x| x.parse().ok()).unwrap_or(usize::MAX);
-                    let o = p["output"].as_str().map(str::to_string).or_else(|| p.as_object().and_then(|m| m.values().find_map(|v| v.as_str().map(str::to_string)))).unwrap_or_default();
+                    let i: usize = r
+                        .split('-')
+                        .next()
+                        .and_then(|x| x.parse().ok())
+                        .unwrap_or(usize::MAX);
+                    let o = p["output"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| {
+                            p.as_object().and_then(|m| {
+                                m.values().find_map(|v| v.as_str().map(str::to_string))
+                            })
+                        })
+                        .unwrap_or_default();
                     if let Some(t) = self.tasks.get_mut(i) {
                         t.out = strip(&o);
                     }
                 } else if id.starts_with("fsg") {
-                    self.fsug = p["suggestions"].as_array().cloned().unwrap_or_default().iter().map(|x| sv(x, "path")).filter(|x| !x.is_empty()).take(12).collect();
+                    self.fsug = p["suggestions"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|x| sv(x, "path"))
+                        .filter(|x| !x.is_empty())
+                        .take(12)
+                        .collect();
                     self.ms = 0;
                 } else if id.starts_with("mcs") {
-                    let rows: Vec<(String, String, String)> = p["mcpServers"].as_array().cloned().unwrap_or_default().iter().map(|x| {
-                        let st = sv(x, "status");
-                        let er = sv(x, "error");
-                        let n = x["tools"].as_array().map(|t| t.len()).unwrap_or(0);
-                        let r = if st == "connected" && n > 0 { format!("{n} tools  connected") } else if !er.is_empty() { format!("{st}  {}", one(&er, 40)) } else { st };
-                        (sv(x, "name"), r, sv(x, "name"))
-                    }).collect();
+                    let rows: Vec<(String, String, String)> = p["mcpServers"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|x| {
+                            let st = sv(x, "status");
+                            let er = sv(x, "error");
+                            let n = x["tools"].as_array().map(|t| t.len()).unwrap_or(0);
+                            let r = if st == "connected" && n > 0 {
+                                format!("{n} tools  connected")
+                            } else if !er.is_empty() {
+                                format!("{st}  {}", one(&er, 40))
+                            } else {
+                                st
+                            };
+                            (sv(x, "name"), r, sv(x, "name"))
+                        })
+                        .collect();
                     if let Some(k) = &mut self.pk {
                         if k.kind == 2 {
                             k.sel = k.sel.min(rows.len().saturating_sub(1));
@@ -1310,17 +1803,42 @@ impl App {
                     self.ctrl("mcs", json!({"subtype": "mcp_status"}));
                 } else if id.starts_with("dif") {
                     let d = p["diff"].clone();
-                    let rows: Vec<(String, String, String)> = d["perFileStats"].as_array().cloned().unwrap_or_default().iter().map(|x| {
-                        let st = sv(x, "status");
-                        let r = if x["isBinary"] == true { "binary".to_string() } else { format!("+{} -{}", x["added"].as_u64().unwrap_or(0), x["removed"].as_u64().unwrap_or(0)) };
-                        let path = sv(x, "path");
-                        let label = if x["isUntracked"] == true { format!("{path}  new") } else if !st.is_empty() && st != "modified" { format!("{path}  {st}") } else { path.clone() };
-                        (label, r, path)
-                    }).collect();
+                    let rows: Vec<(String, String, String)> = d["perFileStats"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|x| {
+                            let st = sv(x, "status");
+                            let r = if x["isBinary"] == true {
+                                "binary".to_string()
+                            } else {
+                                format!(
+                                    "+{} -{}",
+                                    x["added"].as_u64().unwrap_or(0),
+                                    x["removed"].as_u64().unwrap_or(0)
+                                )
+                            };
+                            let path = sv(x, "path");
+                            let label = if x["isUntracked"] == true {
+                                format!("{path}  new")
+                            } else if !st.is_empty() && st != "modified" {
+                                format!("{path}  {st}")
+                            } else {
+                                path.clone()
+                            };
+                            (label, r, path)
+                        })
+                        .collect();
                     let s = &d["stats"];
                     if let Some(k) = &mut self.pk {
                         if k.kind == 3 {
-                            k.title = format!("diff  {} files  +{} -{}", s["filesCount"].as_u64().unwrap_or(0), s["linesAdded"].as_u64().unwrap_or(0), s["linesRemoved"].as_u64().unwrap_or(0));
+                            k.title = format!(
+                                "diff  {} files  +{} -{}",
+                                s["filesCount"].as_u64().unwrap_or(0),
+                                s["linesAdded"].as_u64().unwrap_or(0),
+                                s["linesRemoved"].as_u64().unwrap_or(0)
+                            );
                             k.items = rows;
                         }
                     }
@@ -1370,7 +1888,11 @@ impl App {
                 self.syncset();
                 let tb = self.lv.as_ref().map(|l| l.tb).unwrap_or(0);
                 let txt = sv(&e, "result");
-                let quiet = !self.bs.iter().skip(tb).any(|b| matches!(b, B::T(_) | B::Tl(_)));
+                let quiet = !self
+                    .bs
+                    .iter()
+                    .skip(tb)
+                    .any(|b| matches!(b, B::T(_) | B::Tl(_)));
                 if (quiet || e["is_error"] == true) && !txt.trim().is_empty() {
                     self.bs.push(B::T(txt));
                 }
@@ -1384,7 +1906,15 @@ impl App {
                 }
                 let tot = e["total_cost_usd"].as_f64().unwrap_or(0.0);
                 let u = &e["usage"];
-                let tok = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"].iter().map(|k| u[*k].as_u64().unwrap_or(0)).sum::<u64>();
+                let tok = [
+                    "input_tokens",
+                    "cache_creation_input_tokens",
+                    "cache_read_input_tokens",
+                    "output_tokens",
+                ]
+                .iter()
+                .map(|k| u[*k].as_u64().unwrap_or(0))
+                .sum::<u64>();
                 let secs = e["duration_ms"].as_f64().unwrap_or(0.0) as f32 / 1000.0;
                 let (c0, w0) = self.lv.as_ref().map(|l| (l.c0, l.w0)).unwrap_or((0.0, 0.0));
                 let dw = if w0 >= 0.0 { self.d7 - w0 } else { 0.0 };
@@ -1414,10 +1944,14 @@ impl App {
     }
 
     fn load(&mut self, sid: &str, cwd: &str) {
-        let Ok(f) = std::fs::read_to_string(format!("{}/{sid}.jsonl", pdir(cwd))) else { return };
+        let Ok(f) = std::fs::read_to_string(format!("{}/{sid}.jsonl", pdir(cwd))) else {
+            return;
+        };
         let keep = std::mem::take(&mut self.bs);
         for l in f.lines() {
-            let Ok(o) = serde_json::from_str::<Value>(l) else { continue };
+            let Ok(o) = serde_json::from_str::<Value>(l) else {
+                continue;
+            };
             if o["isSidechain"] == true || o["isMeta"] == true {
                 continue;
             }
@@ -1425,11 +1959,17 @@ impl App {
             match o["type"].as_str().unwrap_or("") {
                 "user" => match c {
                     Value::String(t) if t.starts_with('<') => {
-                        if let Some(x) = t.split("<command-name>").nth(1).and_then(|r| r.split('<').next()) {
+                        if let Some(x) = t
+                            .split("<command-name>")
+                            .nth(1)
+                            .and_then(|r| r.split('<').next())
+                        {
                             self.bs.push(B::Sys(x.to_string()));
                         }
                     }
-                    Value::String(t) if t.starts_with("[Request interrupted") => self.bs.push(B::Sys("interrupted".into())),
+                    Value::String(t) if t.starts_with("[Request interrupted") => {
+                        self.bs.push(B::Sys("interrupted".into()))
+                    }
                     Value::String(t) => {
                         self.bs.push(B::U(t.clone(), String::new()));
                         let i = self.bs.len() - 1;
@@ -1442,8 +1982,12 @@ impl App {
                         for x in a.clone() {
                             match x["type"].as_str().unwrap_or("") {
                                 "tool_result" => self.tres(&x, &o["toolUseResult"]),
-                                "text" if sv(&x, "text").starts_with("[Request interrupted") => self.bs.push(B::Sys("interrupted".into())),
-                                "text" if !sv(&x, "text").starts_with('<') => self.bs.push(B::U(sv(&x, "text"), String::new())),
+                                "text" if sv(&x, "text").starts_with("[Request interrupted") => {
+                                    self.bs.push(B::Sys("interrupted".into()))
+                                }
+                                "text" if !sv(&x, "text").starts_with('<') => {
+                                    self.bs.push(B::U(sv(&x, "text"), String::new()))
+                                }
                                 _ => {}
                             }
                         }
@@ -1471,7 +2015,8 @@ impl App {
                 }
             }
         }
-        self.bs.push(B::Sys(format!("resumed  {}", &sid[..8.min(sid.len())])));
+        self.bs
+            .push(B::Sys(format!("resumed  {}", &sid[..8.min(sid.len())])));
         self.bs.extend(keep);
         if let Some(l) = &mut self.lv {
             l.tb = self.bs.len();
@@ -1491,7 +2036,10 @@ impl App {
         if let Some(l) = &mut self.lv {
             l.rwp = Some((i, mode == 0));
         }
-        self.ctrl("rwf", json!({"subtype": "rewind_files", "user_message_id": u}));
+        self.ctrl(
+            "rwf",
+            json!({"subtype": "rewind_files", "user_message_id": u}),
+        );
     }
 
     fn rconv(&mut self, i: usize) {
@@ -1512,14 +2060,27 @@ impl App {
             }
             v
         };
-        let cwd = std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+        let cwd = std::env::current_dir()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default();
         let par = std::fs::read_to_string(format!("{}/{sid}.jsonl", pdir(&cwd)))
             .ok()
-            .and_then(|f| f.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|o| sv(o, "uuid") == u).map(|o| sv(&o, "parentUuid")))
+            .and_then(|f| {
+                f.lines()
+                    .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                    .find(|o| sv(o, "uuid") == u)
+                    .map(|o| sv(&o, "parentUuid"))
+            })
             .unwrap_or_default();
         let mut ex = base.clone();
         if !par.is_empty() && !sid.is_empty() {
-            ex.extend(["--resume".into(), sid.clone(), "--resume-session-at".into(), par.clone(), "--fork-session".into()]);
+            ex.extend([
+                "--resume".into(),
+                sid.clone(),
+                "--resume-session-at".into(),
+                par.clone(),
+                "--fork-session".into(),
+            ]);
         }
         let Ok((ch, inp, rx)) = spawn(&ex) else {
             self.toast("rewind failed");
@@ -1531,15 +2092,42 @@ impl App {
         };
         let cmds = l.cmds.clone();
         let c0 = l.c0;
-        let uid: HashMap<usize, String> = l.uid.iter().filter(|(k, _)| **k < i).map(|(k, v)| (*k, v.clone())).collect();
-        self.lv = Some(Lv { inp, rx, ch, rid: 0, tm: HashMap::new(), sm: HashMap::new(), bm: HashMap::new(), areq: None, sid: if par.is_empty() { String::new() } else { sid }, args: base, brx: None, bch: None, tb: 0, uid, rwp: None, c0, w0: -1.0, cmds });
+        let uid: HashMap<usize, String> = l
+            .uid
+            .iter()
+            .filter(|(k, _)| **k < i)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        self.lv = Some(Lv {
+            inp,
+            rx,
+            ch,
+            rid: 0,
+            tm: HashMap::new(),
+            sm: HashMap::new(),
+            bm: HashMap::new(),
+            areq: None,
+            sid: if par.is_empty() { String::new() } else { sid },
+            args: base,
+            brx: None,
+            bch: None,
+            tb: 0,
+            uid,
+            rwp: None,
+            c0,
+            w0: -1.0,
+            cmds,
+        });
         self.bs.truncate(i);
         self.ask = None;
         self.sb = None;
         self.busy = false;
         self.inp = txt;
         self.cur = self.inp.chars().count();
-        self.ctrl("init", json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}));
+        self.ctrl(
+            "init",
+            json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}),
+        );
         self.toast("rewound");
     }
 
@@ -1580,7 +2168,9 @@ impl App {
                 }
             }
             "content_block_delta" => {
-                let Some(i) = self.lv.as_ref().and_then(|l| l.bm.get(&idx).copied()) else { return };
+                let Some(i) = self.lv.as_ref().and_then(|l| l.bm.get(&idx).copied()) else {
+                    return;
+                };
                 let d = &ev["delta"];
                 let add = match d["type"].as_str().unwrap_or("") {
                     "text_delta" => sv(d, "text"),
@@ -1650,7 +2240,9 @@ impl App {
 
     fn tres(&mut self, c: &Value, m: &Value) {
         let id = sv(c, "tool_use_id");
-        let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(&id).copied()) else { return };
+        let Some(i) = self.lv.as_ref().and_then(|l| l.tm.get(&id).copied()) else {
+            return;
+        };
         let err = c["is_error"] == true;
         let txt = rtext(c);
         let now = self.t.max(1);
@@ -1674,20 +2266,38 @@ impl App {
                         t.sum = "background".into();
                         return;
                     }
-                    let n = m["totalToolUseCount"].as_u64().unwrap_or(t.body.iter().filter(|x| matches!(x, Ln::P(_))).count() as u64);
+                    let n = m["totalToolUseCount"]
+                        .as_u64()
+                        .unwrap_or(t.body.iter().filter(|x| matches!(x, Ln::P(_))).count() as u64);
                     let mut s = vec![];
                     if n > 0 {
-                        s.push(if n == 1 { "1 tool".to_string() } else { format!("{n} tools") });
+                        s.push(if n == 1 {
+                            "1 tool".to_string()
+                        } else {
+                            format!("{n} tools")
+                        });
                     }
                     if let Some(k) = m["totalTokens"].as_u64() {
                         s.push(format!("{:.1}k tok", k as f32 / 1000.0));
                     }
-                    let ms = m["totalDurationMs"].as_u64().unwrap_or(if t.t1 > t.t0 { (t.t1 - t.t0) * 33 } else { 0 });
+                    let ms = m["totalDurationMs"].as_u64().unwrap_or(if t.t1 > t.t0 {
+                        (t.t1 - t.t0) * 33
+                    } else {
+                        0
+                    });
                     if ms > 0 {
                         let sc = ms / 1000;
-                        s.push(if sc >= 60 { format!("{}m {}s", sc / 60, sc % 60) } else { format!("{sc}s") });
+                        s.push(if sc >= 60 {
+                            format!("{}m {}s", sc / 60, sc % 60)
+                        } else {
+                            format!("{sc}s")
+                        });
                     }
-                    t.sum = if s.is_empty() { "done".into() } else { s.join(" · ") };
+                    t.sum = if s.is_empty() {
+                        "done".into()
+                    } else {
+                        s.join(" · ")
+                    };
                 }
                 Tk::Read => t.sum = format!("{} lines", txt.lines().count()),
                 Tk::Grep => t.sum = format!("{} results", ls.len()),
@@ -1696,10 +2306,20 @@ impl App {
                         Some(l) if !l.starts_with('(') => one(l, 48),
                         _ => "ok".into(),
                     };
-                    t.body = ls.iter().rev().take(400).rev().map(|l| Ln::P(one(l, 200))).collect();
+                    t.body = ls
+                        .iter()
+                        .rev()
+                        .take(400)
+                        .rev()
+                        .map(|l| Ln::P(one(l, 200)))
+                        .collect();
                 }
                 _ => {
-                    t.sum = if ls.is_empty() { "done".into() } else { format!("{} lines", ls.len()) };
+                    t.sum = if ls.is_empty() {
+                        "done".into()
+                    } else {
+                        format!("{} lines", ls.len())
+                    };
                     t.body = ls.iter().take(12).map(|l| Ln::P(one(l, 200))).collect();
                 }
             }
@@ -1714,7 +2334,13 @@ mod model_tests {
     #[test]
     fn model_command_names_resolve() {
         let a = App::new();
-        for (q, want) in [("opus", "claude-opus-5-5"), ("Opus 5.5", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5-5"), ("haiku-5-5", "claude-haiku-5-5"), ("claude-fable-5-1", "claude-fable-5-1")] {
+        for (q, want) in [
+            ("opus", "claude-opus-5-5"),
+            ("Opus 5.5", "claude-opus-5-5"),
+            ("sonnet", "claude-sonnet-5-5"),
+            ("haiku-5-5", "claude-haiku-5-5"),
+            ("claude-fable-5-1", "claude-fable-5-1"),
+        ] {
             assert_eq!(a.pickmodel(q).as_deref(), Some(want), "{q}");
         }
         assert_eq!(a.pickmodel("nonsense"), None);

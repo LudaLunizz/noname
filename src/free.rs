@@ -66,7 +66,10 @@ pub fn parse_claude(json: &str) -> Option<u64> {
 /// All-time tokens from the JSON that `free-usage --json` prints.
 pub fn parse(json: &str) -> Option<u64> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    v.get("periods")?.get("all time")?.get("tokens_total")?.as_u64()
+    v.get("periods")?
+        .get("all time")?
+        .get("tokens_total")?
+        .as_u64()
 }
 
 /// `2.87M`, `481.7k`, `950`.
@@ -82,12 +85,30 @@ pub fn short(n: u64) -> String {
 fn run(name: &str, env: &str, parse: fn(&str) -> Option<u64>) -> Option<u64> {
     if let Some(c) = std::env::var(env).ok().filter(|c| !c.trim().is_empty()) {
         let mut w = c.split_whitespace();
-        let out = Command::new(w.next()?).args(w).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-        return if out.status.success() { parse(&String::from_utf8_lossy(&out.stdout)) } else { None };
+        let out = Command::new(w.next()?)
+            .args(w)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        return if out.status.success() {
+            parse(&String::from_utf8_lossy(&out.stdout))
+        } else {
+            None
+        };
     }
     let local = format!("{}/.local/bin/{name}", sys::home());
-    let cmd = if std::path::Path::new(&local).exists() { local } else { name.to_string() };
-    let out = Command::new(cmd).arg("--json").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let cmd = if std::path::Path::new(&local).exists() {
+        local
+    } else {
+        name.to_string()
+    };
+    let out = Command::new(cmd)
+        .arg("--json")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -126,12 +147,18 @@ mod tests {
     fn rejects_other_shapes() {
         assert_eq!(parse("not json"), None);
         assert_eq!(parse(r#"{"periods":{}}"#), None);
-        assert_eq!(parse(r#"{"periods":{"all time":{"tokens_total":"x"}}}"#), None);
+        assert_eq!(
+            parse(r#"{"periods":{"all time":{"tokens_total":"x"}}}"#),
+            None
+        );
     }
 
     #[test]
     fn parses_claude_total() {
-        assert_eq!(parse_claude(r#"{"total_tokens":8964150783,"through":"2026-11-14"}"#), Some(8_964_150_783));
+        assert_eq!(
+            parse_claude(r#"{"total_tokens":8964150783,"through":"2026-11-14"}"#),
+            Some(8_964_150_783)
+        );
         assert_eq!(parse_claude("{}"), None);
         assert_eq!(parse_claude("nope"), None);
     }

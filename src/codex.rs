@@ -1,3 +1,6 @@
+//! The Codex engine (one `codex exec` per message) and the state it shares with the other
+//! one-shot engines (`agy`, `opencode`).
+
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -9,13 +12,13 @@ use serde_json::{Value, json};
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Eng {
+pub(crate) enum Eng {
     Codex,
     Opencode,
     Agy,
 }
 
-pub struct Cx {
+pub(crate) struct Cx {
     pub(crate) tid: Option<String>,
     pub(crate) ch: Option<Child>,
     pub(crate) rx: Option<Receiver<Value>>,
@@ -44,14 +47,33 @@ pub(crate) fn sv(v: &Value, k: &str) -> String {
 
 pub(crate) fn one(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("").trim();
-    if l.chars().count() > n { l.chars().take(n).collect::<String>() + "…" } else { l.to_string() }
+    if l.chars().count() > n {
+        l.chars().take(n).collect::<String>() + "…"
+    } else {
+        l.to_string()
+    }
 }
 
 fn unwrap(c: &str) -> String {
-    for p in ["bash -lc ", "/bin/bash -lc ", "bash -c ", "sh -c ", "zsh -lc ", "powershell.exe -Command ", "powershell -Command ", "pwsh -Command ", "pwsh.exe -Command ", "cmd /c ", "cmd.exe /c "] {
+    for p in [
+        "bash -lc ",
+        "/bin/bash -lc ",
+        "bash -c ",
+        "sh -c ",
+        "zsh -lc ",
+        "powershell.exe -Command ",
+        "powershell -Command ",
+        "pwsh -Command ",
+        "pwsh.exe -Command ",
+        "cmd /c ",
+        "cmd.exe /c ",
+    ] {
         if let Some(r) = c.strip_prefix(p) {
             let r = r.trim();
-            if r.len() >= 2 && ((r.starts_with('"') && r.ends_with('"')) || (r.starts_with('\'') && r.ends_with('\''))) {
+            if r.len() >= 2
+                && ((r.starts_with('"') && r.ends_with('"'))
+                    || (r.starts_with('\'') && r.ends_with('\'')))
+            {
                 return r[1..r.len() - 1].replace("\\\"", "\"");
             }
             return r.to_string();
@@ -61,10 +83,24 @@ fn unwrap(c: &str) -> String {
 }
 
 fn cfg_model() -> String {
-    let h = std::env::var("CODEX_HOME").unwrap_or_else(|_| format!("{}/.codex", crate::sys::home()));
+    let h =
+        std::env::var("CODEX_HOME").unwrap_or_else(|_| format!("{}/.codex", crate::sys::home()));
     std::fs::read_to_string(format!("{h}/config.toml"))
         .ok()
-        .and_then(|f| f.lines().find(|l| l.trim_start().starts_with("model ") || l.trim_start().starts_with("model=")).map(|l| l.split('=').nth(1).unwrap_or("").trim().trim_matches('"').to_string()))
+        .and_then(|f| {
+            f.lines()
+                .find(|l| {
+                    l.trim_start().starts_with("model ") || l.trim_start().starts_with("model=")
+                })
+                .map(|l| {
+                    l.split('=')
+                        .nth(1)
+                        .unwrap_or("")
+                        .trim()
+                        .trim_matches('"')
+                        .to_string()
+                })
+        })
         .filter(|x| !x.is_empty())
         .unwrap_or_else(|| "codex".into())
 }
@@ -80,9 +116,18 @@ impl App {
         a.cwd = {
             let c = std::env::current_dir()?.to_string_lossy().to_string();
             let h = crate::sys::home();
-            if !h.is_empty() && c.starts_with(&h) { format!("~{}", &c[h.len()..]) } else { c }
+            if !h.is_empty() && c.starts_with(&h) {
+                format!("~{}", &c[h.len()..])
+            } else {
+                c
+            }
         };
-        a.br = Command::new("git").args(["branch", "--show-current"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        a.br = Command::new("git")
+            .args(["branch", "--show-current"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
         let mut rest = vec![];
         let mut last = false;
         let mut tid = None;
@@ -99,11 +144,31 @@ impl App {
                 _ => rest.push(x),
             }
         }
-        a.mname = rest.iter().position(|x| x == "-m").and_then(|i| rest.get(i + 1)).cloned().unwrap_or_else(cfg_model);
+        a.mname = rest
+            .iter()
+            .position(|x| x == "-m")
+            .and_then(|i| rest.get(i + 1))
+            .cloned()
+            .unwrap_or_else(cfg_model);
         a.effs = String::new();
-        a.bgw = std::fs::read_to_string(crate::bgfile()).ok().and_then(|x| crate::bg::canon(&x)).filter(|k| crate::bg::exists(k));
+        a.bgw = std::fs::read_to_string(crate::bgfile())
+            .ok()
+            .and_then(|x| crate::bg::canon(&x))
+            .filter(|k| crate::bg::exists(k));
         a.mode = crate::defmode().unwrap_or(0);
-        a.cx = Some(Cx { tid, ch: None, rx: None, args: rest, im: HashMap::new(), last, t0: 0, eng: Eng::Codex, tok: 0, err: String::new(), fin: false });
+        a.cx = Some(Cx {
+            tid,
+            ch: None,
+            rx: None,
+            args: rest,
+            im: HashMap::new(),
+            last,
+            t0: 0,
+            eng: Eng::Codex,
+            tok: 0,
+            err: String::new(),
+            fin: false,
+        });
         Ok(a)
     }
 
@@ -112,7 +177,11 @@ impl App {
         if let Some(c) = &mut a.cx {
             c.eng = Eng::Opencode;
         }
-        if !a.cx.as_ref().is_some_and(|c| c.args.iter().any(|x| x == "-m")) {
+        if !a
+            .cx
+            .as_ref()
+            .is_some_and(|c| c.args.iter().any(|x| x == "-m"))
+        {
             a.mname = crate::opencode::cfg_model();
         }
         Ok(a)
@@ -124,7 +193,11 @@ impl App {
         if let Some(c) = &mut a.cx {
             c.eng = Eng::Agy;
         }
-        if !a.cx.as_ref().is_some_and(|c| c.args.iter().any(|x| x == "-m")) {
+        if !a
+            .cx
+            .as_ref()
+            .is_some_and(|c| c.args.iter().any(|x| x == "-m"))
+        {
             a.mname = crate::agy::cfg_model();
         }
         Ok(a)
@@ -164,7 +237,12 @@ impl App {
         self.busy = true;
         let mode = self.mode;
         let t = self.t;
-        let imgs: Vec<(&'static str, Vec<u8>)> = self.content(&s).unwrap_or_default().into_iter().map(|(m, b)| (m, b.to_vec())).collect();
+        let imgs: Vec<(&'static str, Vec<u8>)> = self
+            .content(&s)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(m, b)| (m, b.to_vec()))
+            .collect();
         let x = self.expand(&s);
         let nm = self.eng();
         let Some(c) = &mut self.cx else { return };
@@ -196,7 +274,11 @@ impl App {
             }
             cmd.args(&c.args);
             for (k, (m, b)) in imgs.iter().enumerate() {
-                let f = std::env::temp_dir().join(format!("noname-{}-{t}-{k}.{}", std::process::id(), crate::img::ext(m)));
+                let f = std::env::temp_dir().join(format!(
+                    "noname-{}-{t}-{k}.{}",
+                    std::process::id(),
+                    crate::img::ext(m)
+                ));
                 if std::fs::write(&f, b).is_ok() {
                     cmd.arg("-i").arg(f);
                 }
@@ -214,7 +296,9 @@ impl App {
             cmd
         };
         let agy = c.eng == Eng::Agy;
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(if agy { Stdio::piped() } else { Stdio::null() });
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(if agy { Stdio::piped() } else { Stdio::null() });
         live::guard_pub(&mut cmd);
         let Ok(mut ch) = cmd.spawn() else {
             self.busy = false;
@@ -222,7 +306,7 @@ impl App {
             return;
         };
         live::track_pid(ch.id() as i32);
-        let out = ch.stdout.take().unwrap();
+        let out = ch.stdout.take().expect("stdout is piped above");
         let (tx, rx) = channel();
         // agy reports sign-in problems and denied permissions on stderr only
         let eh = ch.stderr.take().map(|er| {
@@ -237,9 +321,17 @@ impl App {
             })
         });
         // NONAME_ENGINE_LOG=FILE keeps every raw event line, for bug reports about an engine
-        let log = std::env::var("NONAME_ENGINE_LOG").ok().filter(|x| !x.is_empty());
+        let log = std::env::var("NONAME_ENGINE_LOG")
+            .ok()
+            .filter(|x| !x.is_empty());
         thread::spawn(move || {
-            let mut lf = log.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
+            let mut lf = log.and_then(|p| {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                    .ok()
+            });
             for l in BufReader::new(out).lines() {
                 let Ok(l) = l else { break };
                 if let Some(f) = &mut lf {
@@ -347,14 +439,25 @@ impl App {
             }
             "turn.completed" => {
                 let u = &e["usage"];
-                let tok = ["input_tokens", "cached_input_tokens", "output_tokens"].iter().map(|k| u[*k].as_u64().unwrap_or(0)).sum::<u64>();
+                let tok = ["input_tokens", "cached_input_tokens", "output_tokens"]
+                    .iter()
+                    .map(|k| u[*k].as_u64().unwrap_or(0))
+                    .sum::<u64>();
                 let t0 = self.cx.as_ref().map(|c| c.t0).unwrap_or(self.t);
                 let secs = (self.t - t0) as f32 * 0.033;
-                let tk = if tok >= 1000 { format!("{:.1}k", tok as f64 / 1000.0) } else { tok.to_string() };
-                self.bs.push(B::Rc(format!("{secs:.1}s  ·  {tk} tok"), self.t.max(1)));
+                let tk = if tok >= 1000 {
+                    format!("{:.1}k", tok as f64 / 1000.0)
+                } else {
+                    tok.to_string()
+                };
+                self.bs
+                    .push(B::Rc(format!("{secs:.1}s  ·  {tk} tok"), self.t.max(1)));
             }
             "turn.failed" | "error" => {
-                let m = e["error"]["message"].as_str().map(|x| x.to_string()).unwrap_or_else(|| sv(&e, "message"));
+                let m = e["error"]["message"]
+                    .as_str()
+                    .map(|x| x.to_string())
+                    .unwrap_or_else(|| sv(&e, "message"));
                 if !m.is_empty() {
                     self.bs.push(B::T(format!("**codex:** {}", one(&m, 200))));
                 }
@@ -390,7 +493,11 @@ impl App {
         match ty.as_str() {
             "agent_message" | "reasoning" => {
                 let txt = sv(it, "text");
-                let b = if ty == "reasoning" { B::Th(txt.replace("**", "")) } else { B::T(txt) };
+                let b = if ty == "reasoning" {
+                    B::Th(txt.replace("**", ""))
+                } else {
+                    B::T(txt)
+                };
                 match ex {
                     Some(i) => self.bs[i] = b,
                     None => {
@@ -404,16 +511,28 @@ impl App {
             }
             "todo_list" => {
                 if let Some(a) = it["items"].as_array() {
-                    self.todo = a.iter().map(|x| (if x["completed"] == true { 2 } else { 0 }, sv(x, "text"))).collect();
+                    self.todo = a
+                        .iter()
+                        .map(|x| (if x["completed"] == true { 2 } else { 0 }, sv(x, "text")))
+                        .collect();
                 }
             }
-            "command_execution" | "file_change" | "mcp_tool_call" | "web_search" | "collab_tool_call" => {
+            "command_execution" | "file_change" | "mcp_tool_call" | "web_search"
+            | "collab_tool_call" => {
                 let (k, nm, a) = match ty.as_str() {
-                    "command_execution" => (Tk::Bash, "bash".to_string(), one(&unwrap(&sv(it, "command")), 140)),
+                    "command_execution" => (
+                        Tk::Bash,
+                        "bash".to_string(),
+                        one(&unwrap(&sv(it, "command")), 140),
+                    ),
                     "file_change" => {
                         let ch = it["changes"].as_array().cloned().unwrap_or_default();
                         let p: Vec<String> = ch.iter().map(|c| sv(c, "path")).collect();
-                        let p = p.iter().map(|x| x.rsplit('/').next().unwrap_or(x).to_string()).collect::<Vec<_>>().join(", ");
+                        let p = p
+                            .iter()
+                            .map(|x| x.rsplit('/').next().unwrap_or(x).to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         (Tk::Edit, "edit".to_string(), p)
                     }
                     "mcp_tool_call" => (Tk::Oth, sv(it, "server"), sv(it, "tool")),
@@ -428,8 +547,12 @@ impl App {
                 let out = sv(it, "aggregated_output");
                 let ls: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
                 let sum = match (ty.as_str(), st) {
-                    ("command_execution", St::Err) => format!("exit {}", it["exit_code"].as_i64().unwrap_or(1)),
-                    ("command_execution", St::Ok) => ls.last().map(|l| one(l, 48)).unwrap_or_else(|| "ok".into()),
+                    ("command_execution", St::Err) => {
+                        format!("exit {}", it["exit_code"].as_i64().unwrap_or(1))
+                    }
+                    ("command_execution", St::Ok) => {
+                        ls.last().map(|l| one(l, 48)).unwrap_or_else(|| "ok".into())
+                    }
                     ("file_change", _) => {
                         let ch = it["changes"].as_array().map(|x| x.len()).unwrap_or(0);
                         format!("{ch} files")
@@ -438,7 +561,13 @@ impl App {
                     (_, St::Ok) => "done".into(),
                     _ => String::new(),
                 };
-                let body: Vec<Ln> = ls.iter().rev().take(12).rev().map(|l| Ln::P(one(l, 200))).collect();
+                let body: Vec<Ln> = ls
+                    .iter()
+                    .rev()
+                    .take(12)
+                    .rev()
+                    .map(|l| Ln::P(one(l, 200)))
+                    .collect();
                 match ex {
                     Some(i) => {
                         if let Some(B::Tl(t)) = self.bs.get_mut(i) {
@@ -451,7 +580,16 @@ impl App {
                         }
                     }
                     None => {
-                        self.bs.push(B::Tl(Tool { k, nm, a, sum, body, st, t0: now, t1: if st == St::Run { 0 } else { now } }));
+                        self.bs.push(B::Tl(Tool {
+                            k,
+                            nm,
+                            a,
+                            sum,
+                            body,
+                            st,
+                            t0: now,
+                            t1: if st == St::Run { 0 } else { now },
+                        }));
                         let i = self.bs.len() - 1;
                         self.sel = Some(i);
                         if let Some(c) = &mut self.cx {
