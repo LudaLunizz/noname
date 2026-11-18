@@ -1105,8 +1105,8 @@ impl App {
             ("location", LAYOUT[5].1[lay(5)].into()),
             ("right-click paste", if rclick() { "on" } else { "off" }.into()),
             ("opacity", format!("{}%", opac())),
-            ("free tokens", if free::enabled() { "on, middle of the footer" } else { "off" }.into()),
-            ("claude tokens", if free::claude_enabled() { "on, after the free total" } else { "off" }.into()),
+            ("free token count", if free::enabled() { "on, middle of the footer" } else { "off" }.into()),
+            ("claude token count", if free::claude_enabled() { "on, after the free total" } else { "off" }.into()),
             ("check for updates", if self.ups.is_empty() { format!("{}  {}", upd::short(), upd::DATE) } else { format!("{}  ·  {}", upd::short(), self.ups) }),
         ]
     }
@@ -2122,13 +2122,13 @@ impl App {
                         let on = !free::enabled();
                         free::set_enabled(on);
                         self.frat = None;
-                        self.toast(format!("free tokens  {}", if on { "on" } else { "off" }));
+                        self.toast(format!("free token count  {}", if on { "on" } else { "off" }));
                     }
                     17 => {
                         let on = !free::claude_enabled();
                         free::set_claude_enabled(on);
                         self.clat = None;
-                        self.toast(format!("claude tokens  {}", if on { "on" } else { "off" }));
+                        self.toast(format!("claude token count  {}", if on { "on" } else { "off" }));
                     }
                     _ => self.upcheck(true),
                 },
