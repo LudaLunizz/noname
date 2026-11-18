@@ -3664,6 +3664,35 @@ fn tbl(rows: &[&str], w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
     }
 }
 
+/// One code line, word-wrapped to `w` behind the code prefix; wrapped parts keep the indent plus two spaces.
+fn code(raw: &str, w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
+    let body = raw.trim_start_matches(' ');
+    let ind = " ".repeat(raw.len() - body.len());
+    let segs: Vec<(String, Style)> = hl(body, m)
+        .into_iter()
+        .map(|x| (x.content.into_owned(), x.style))
+        .collect();
+    let room = w.saturating_sub(m.fpre.width() + ind.len());
+    let ls = wsegs(&segs, room.saturating_sub(2).max(room / 2));
+    if ls.is_empty() {
+        o.push(Line::from(vec![
+            Span::styled(m.fpre.to_string(), m.fps),
+            Span::raw(ind),
+        ]));
+        return;
+    }
+    for (i, l) in ls.into_iter().enumerate() {
+        let lead = if i == 0 {
+            ind.clone()
+        } else {
+            format!("{ind}  ")
+        };
+        let mut sp = vec![Span::styled(m.fpre.to_string(), m.fps), Span::raw(lead)];
+        sp.extend(l);
+        o.push(Line::from(sp));
+    }
+}
+
 /// Renders markdown text `s` into lines for width `w`.
 pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
     let mut o = vec![];
@@ -3683,9 +3712,7 @@ pub fn md(s: &str, w: usize, m: &Md) -> Vec<Line<'static>> {
             continue;
         }
         if inf {
-            let mut sp = vec![Span::styled(m.fpre.to_string(), m.fps)];
-            sp.extend(hl(raw, m));
-            o.push(Line::from(sp));
+            code(raw, w, m, &mut o);
             continue;
         }
         if raw.trim().is_empty() {
@@ -5156,5 +5183,57 @@ mod key_tests {
         let mut a = App::new();
         a.key(altgr(ev('a', Km::CONTROL | Km::ALT)));
         assert_eq!(a.inp, "");
+    }
+}
+
+#[cfg(test)]
+mod md_tests {
+    use super::*;
+
+    fn mdt() -> Md {
+        let s = Style::default();
+        Md {
+            t: s,
+            b: s,
+            c: s,
+            fe: s,
+            kw: s,
+            st: s,
+            cm: s,
+            nu: s,
+            bul: "- ",
+            bs: s,
+            fpre: "  | ",
+            fps: s,
+        }
+    }
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|x| x.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn long_code_lines_wrap() {
+        let s = "```\n    gamescope -W 3440 -H 1440 -w 1920 -h 1080 -r 175 -f -S stretch --force-grab-cursor -- %command%\n```";
+        let ls = md(s, 40, &mdt());
+        assert!(ls.len() > 1);
+        for l in &ls {
+            assert!(text(l).width() <= 40, "too wide: {:?}", text(l));
+            assert!(text(l).starts_with("  |     "));
+        }
+        let joined: Vec<String> = ls
+            .iter()
+            .map(|l| text(l).trim_start_matches("  | ").trim().to_string())
+            .collect();
+        assert_eq!(
+            joined.join(" "),
+            "gamescope -W 3440 -H 1440 -w 1920 -h 1080 -r 175 -f -S stretch --force-grab-cursor -- %command%"
+        );
+    }
+
+    #[test]
+    fn short_code_lines_stay_whole() {
+        let ls = md("```\n  let x = 1;\n\n```", 80, &mdt());
+        assert_eq!(text(&ls[0]), "  |   let x = 1;");
     }
 }
