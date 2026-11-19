@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 
+use sha2::{Digest, Sha256};
+
 use crate::sys;
 
 /// Git commit this build was made from (empty when unknown).
@@ -304,13 +306,28 @@ fn release() -> Up {
     }
     let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
     let name = format!("noname-{TARGET}.{ext}");
-    let Some(url) = v["assets"]
-        .as_array()
-        .and_then(|a| a.iter().find(|x| x["name"] == name.as_str()))
-        .and_then(|x| x["browser_download_url"].as_str())
-        .map(|s| s.to_string())
-    else {
+    let asset = |n: &str| {
+        v["assets"]
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["name"] == n))
+            .and_then(|x| x["browser_download_url"].as_str())
+            .map(|s| s.to_string())
+    };
+    let Some(url) = asset(&name) else {
         return Up::Fail(format!("no build for {TARGET}"));
+    };
+    // the release lists the sha-256 of every archive; without it nothing is installed
+    let Some(want) = ["SHA256SUMS".to_string(), format!("{name}.sha256")]
+        .iter()
+        .filter_map(|n| asset(n))
+        .find_map(|u| {
+            sum_for(
+                &out(Command::new(&curl).args(["-fsSL", "-A", "noname-updater", &u])),
+                &name,
+            )
+        })
+    else {
+        return Up::Fail("no checksum in the release, not installed".into());
     };
     let d = cache().with_file_name("dl");
     let _ = std::fs::remove_dir_all(&d);
@@ -324,6 +341,13 @@ fn release() -> Up {
         .arg(&url))
     {
         return Up::Fail("download failed".into());
+    }
+    match std::fs::read(&arc) {
+        Ok(b) if hex(&Sha256::digest(&b)) == want => {}
+        _ => {
+            let _ = std::fs::remove_dir_all(&d);
+            return Up::Fail("download does not match its checksum, not installed".into());
+        }
     }
     if !ok(Command::new(&tar).arg("-xf").arg(&arc).arg("-C").arg(&d)) {
         return Up::Fail("could not unpack".into());
@@ -340,4 +364,46 @@ fn release() -> Up {
         return Up::Fail(format!("install failed: {e}"));
     }
     Up::Ready(tag)
+}
+
+/// The sha-256 listed for file `name` in a `sha256sum` style text (`<hex>  <name>` per
+/// line, or `<hex> *<name>`), lowercase; `None` when it is not listed or not 64 hex digits.
+fn sum_for(text: &str, name: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let (h, n) = l.trim().split_once(char::is_whitespace)?;
+        let n = n.trim_start().trim_start_matches('*');
+        (n == name && h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
+            .then(|| h.to_ascii_lowercase())
+    })
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_the_sum_of_one_file() {
+        let a = "a".repeat(64);
+        let b = "B".repeat(64);
+        let t = format!("{a}  noname-x.tar.gz\n{b} *noname-y.zip\n");
+        assert_eq!(sum_for(&t, "noname-x.tar.gz"), Some(a));
+        assert_eq!(sum_for(&t, "noname-y.zip"), Some("b".repeat(64)));
+        assert_eq!(sum_for(&t, "noname-z.zip"), None);
+        // a name that only ends the same, a short hash, an empty text
+        assert_eq!(sum_for(&t, "x.tar.gz"), None);
+        assert_eq!(sum_for("abc  f", "f"), None);
+        assert_eq!(sum_for("", "f"), None);
+    }
+
+    #[test]
+    fn sha256_hex() {
+        assert_eq!(
+            hex(&Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

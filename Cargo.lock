@@ -706,6 +706,7 @@ dependencies = [
  "libc",
  "ratatui",
  "serde_json",
+ "sha2",
  "signal-hook",
  "unicode-width 0.2.0",
  "vt100",

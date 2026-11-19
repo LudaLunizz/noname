@@ -24,6 +24,7 @@ unwrap_used = "warn"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color"] }
 unicode-width = "0.2"
 serde_json = "1"
+sha2 = "0.10"
 vt100 = "0.15"
 
 [target.'cfg(unix)'.dependencies]
