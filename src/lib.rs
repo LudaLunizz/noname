@@ -3967,6 +3967,8 @@ pub fn run<T: V + Clone>(mut v: T) -> io::Result<()> {
     std::panic::set_hook(Box::new(move |p| {
         let _ = restore();
         sys::opacity_back();
+        sys::log_panic_to(&sys::panic_log(), &p.to_string());
+        eprintln!("noname: panic saved to {}", sys::panic_log().display());
         hook(p)
     }));
     if std::env::var("NONAME_MOCK").is_err() {

@@ -31,6 +31,40 @@ pub fn cfgfile(n: &str) -> String {
     }
 }
 
+/// Path of the panic log: `noname\\panic.log` under `LOCALAPPDATA` on Windows, otherwise `noname/panic.log` under `XDG_CACHE_HOME` or `~/.cache`.
+pub fn panic_log() -> PathBuf {
+    #[cfg(windows)]
+    if let Ok(a) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(a).join("noname").join("panic.log");
+    }
+    let b = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| format!("{}/.cache", home()));
+    PathBuf::from(b).join("noname").join("panic.log")
+}
+
+/// Appends one panic report (Unix time, version, `what` and a backtrace) to the file `path`. Errors are ignored: the
+/// program is already panicking and has nowhere to report them. The file is never trimmed (a panic is rare).
+pub fn log_panic_to(path: &std::path::Path, what: &str) {
+    use std::io::Write;
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(
+            f,
+            "[unix {t}] noname {}\n{what}\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            std::backtrace::Backtrace::force_capture()
+        );
+    }
+}
+
 /// The program `b` as a full path when `which` finds it, otherwise `b` itself so the system searches its own path.
 pub fn bin(b: &str) -> std::ffi::OsString {
     which(b)
@@ -792,6 +826,18 @@ pub fn opacity_back() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panic_report_is_appended_not_overwritten() {
+        let d = std::env::temp_dir().join(format!("noname-panic-{}", std::process::id()));
+        let f = d.join("sub").join("panic.log");
+        log_panic_to(&f, "panicked at src/a.rs:1:2");
+        log_panic_to(&f, "panicked at src/b.rs:3:4");
+        let s = std::fs::read_to_string(&f).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(s.contains("src/a.rs:1:2") && s.contains("src/b.rs:3:4"));
+        assert_eq!(s.matches("] noname ").count(), 2);
+    }
 
     #[test]
     fn open_command_keeps_a_path_with_spaces_whole() {
