@@ -315,13 +315,7 @@ mod win {
 /// Opens `path` at `line` (may be empty) with the command in `NONAME_OPEN` (`{}` is the path, `{line}` the line) or else the system opener. The opener runs detached.
 pub fn open(path: &str, line: &str) {
     let mut c = if let Ok(t) = std::env::var("NONAME_OPEN") {
-        let t = t.replace("{line}", if line.is_empty() { "1" } else { line });
-        let t = if t.contains("{}") {
-            t.replace("{}", path)
-        } else {
-            format!("{t} {path}")
-        };
-        let mut v = t.split_whitespace().map(str::to_string);
+        let mut v = open_cmd(&t, path, line).into_iter();
         let mut c = Command::new(v.next().unwrap_or_default());
         c.args(v);
         c
@@ -347,6 +341,21 @@ pub fn open(path: &str, line: &str) {
         c.process_group(0);
     }
     let _ = c.spawn();
+}
+
+/// The `NONAME_OPEN` command for `path` at `line` as program + arguments. The template is
+/// split at spaces first and `{}` / `{line}` are filled in after, so a path with spaces stays
+/// one argument; with no `{}` the path is added as the last argument.
+fn open_cmd(t: &str, path: &str, line: &str) -> Vec<String> {
+    let ln = if line.is_empty() { "1" } else { line };
+    let mut v: Vec<String> = t
+        .split_whitespace()
+        .map(|w| w.replace("{line}", ln).replace("{}", path))
+        .collect();
+    if !t.contains("{}") {
+        v.push(path.to_string());
+    }
+    v
 }
 
 /// Opens a web link in the default browser (NONAME_OPEN is for files, so it is not used here).
@@ -777,5 +786,23 @@ pub fn opacity_back() {
     };
     if !sh {
         opacity_restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_command_keeps_a_path_with_spaces_whole() {
+        let p = "/home/u/project Solid Craft/a.rs";
+        assert_eq!(
+            open_cmd("code -g {}:{line}", p, "12"),
+            ["code", "-g", "/home/u/project Solid Craft/a.rs:12"]
+        );
+        // no `{}`: the path goes last; no line: line 1
+        assert_eq!(open_cmd("nvim +{line}", p, ""), ["nvim", "+1", p]);
+        // a path that holds `{line}` itself is not filled in
+        assert_eq!(open_cmd("ed {}", "/t/{line}", "3"), ["ed", "/t/{line}"]);
     }
 }
