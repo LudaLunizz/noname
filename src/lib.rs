@@ -3318,55 +3318,78 @@ fn words(s: &str) -> Vec<String> {
 
 /// Word-wraps styled text segments to width `w` into lines of spans.
 pub fn wsegs(segs: &[(String, Style)], w: usize) -> Vec<Vec<Span<'static>>> {
-    let w = w.max(4);
+    wsegs2(segs, w, w)
+}
+
+/// Word-wraps styled text segments into lines of spans: the first line `w0` wide, the
+/// others `w`. Text that touches across segments (no space between, as in a highlighted
+/// `https://...`) stays one word, so a line never breaks inside it except at the edge.
+pub fn wsegs2(segs: &[(String, Style)], w0: usize, w: usize) -> Vec<Vec<Span<'static>>> {
+    let (w0, w) = (w0.max(4), w.max(4));
+    // words across segments: (is space, pieces with their style)
+    let mut wds: Vec<(bool, Vec<(String, Style)>)> = vec![];
+    for (t, st) in segs {
+        for wd in words(t) {
+            let sp = wd.starts_with(' ');
+            match wds.last_mut() {
+                Some((s, p)) if *s == sp => p.push((wd, *st)),
+                _ => wds.push((sp, vec![(wd, *st)])),
+            }
+        }
+    }
+    let lim = |ls: &Vec<Vec<Span<'static>>>| if ls.is_empty() { w0 } else { w };
     let mut ls = vec![];
     let mut cur: Vec<Span<'static>> = vec![];
     let mut cw = 0;
-    for (t, st) in segs {
-        for wd in words(t) {
-            let ww = wd.width();
-            if wd.starts_with(' ') {
-                if cw == 0 {
-                    continue;
-                }
-                if cw + ww > w {
-                    ls.push(std::mem::take(&mut cur));
-                    cw = 0;
-                    continue;
-                }
-                cur.push(Span::styled(wd, *st));
-                cw += ww;
+    for (sp, ps) in wds {
+        let ww: usize = ps.iter().map(|p| p.0.width()).sum();
+        if sp {
+            if cw == 0 {
                 continue;
             }
-            if cw + ww > w && cw > 0 {
-                while let Some(l) = cur.last() {
-                    if l.content.trim().is_empty() {
-                        cur.pop();
-                    } else {
-                        break;
-                    }
-                }
+            if cw + ww > lim(&ls) {
                 ls.push(std::mem::take(&mut cur));
                 cw = 0;
+                continue;
             }
-            if ww > w {
+            cur.extend(ps.into_iter().map(|(t, s)| Span::styled(t, s)));
+            cw += ww;
+            continue;
+        }
+        if cw + ww > lim(&ls) && cw > 0 {
+            while let Some(l) = cur.last() {
+                if l.content.trim().is_empty() {
+                    cur.pop();
+                } else {
+                    break;
+                }
+            }
+            ls.push(std::mem::take(&mut cur));
+            cw = 0;
+        }
+        if ww > lim(&ls) {
+            for (t, st) in ps {
                 let mut b = String::new();
-                for c in wd.chars() {
+                for c in t.chars() {
                     let x = c.width().unwrap_or(0);
-                    if cw + x > w {
-                        cur.push(Span::styled(std::mem::take(&mut b), *st));
+                    if cw + x > lim(&ls) {
+                        if !b.is_empty() {
+                            cur.push(Span::styled(std::mem::take(&mut b), st));
+                        }
                         ls.push(std::mem::take(&mut cur));
                         cw = 0;
                     }
                     b.push(c);
                     cw += x;
                 }
-                cur.push(Span::styled(b, *st));
-                continue;
+                if !b.is_empty() {
+                    cur.push(Span::styled(b, st));
+                }
             }
-            cur.push(Span::styled(wd, *st));
-            cw += ww;
+            continue;
         }
+        cur.extend(ps.into_iter().map(|(t, s)| Span::styled(t, s)));
+        cw += ww;
     }
     if !cur.is_empty() || ls.is_empty() {
         ls.push(cur);
@@ -3673,7 +3696,10 @@ fn code(raw: &str, w: usize, m: &Md, o: &mut Vec<Line<'static>>) {
         .map(|x| (x.content.into_owned(), x.style))
         .collect();
     let room = w.saturating_sub(m.fpre.width() + ind.len());
-    let ls = wsegs(&segs, room.saturating_sub(2).max(room / 2));
+    // the first line uses the full room and the wrapped parts the room after their two
+    // extra spaces, so a long word cut at the edge ends at the right edge on every line
+    // and a link in it is joined back whole (see `links` in main.rs)
+    let ls = wsegs2(&segs, room, room.saturating_sub(2).max(room / 2));
     if ls.is_empty() {
         o.push(Line::from(vec![
             Span::styled(m.fpre.to_string(), m.fps),
@@ -5229,6 +5255,28 @@ mod md_tests {
             joined.join(" "),
             "gamescope -W 3440 -H 1440 -w 1920 -h 1080 -r 175 -f -S stretch --force-grab-cursor -- %command%"
         );
+    }
+
+    #[test]
+    fn touching_segments_wrap_as_one_word() {
+        let s = Style::default();
+        let segs = vec![
+            ("ab ".to_string(), s),
+            ("https".to_string(), s),
+            ("://".to_string(), s),
+            ("x.io/abc".to_string(), s),
+        ];
+        let t: Vec<String> = wsegs(&segs, 12)
+            .iter()
+            .map(|l| l.iter().map(|x| x.content.as_ref()).collect())
+            .collect();
+        assert_eq!(t, ["ab", "https://x.io", "/abc"]);
+        // first line wider than the rest
+        let t: Vec<String> = wsegs2(&[("aaaa bbbb cccc".to_string(), s)], 9, 4)
+            .iter()
+            .map(|l| l.iter().map(|x| x.content.as_ref()).collect())
+            .collect();
+        assert_eq!(t, ["aaaa bbbb", "cccc"]);
     }
 
     #[test]
