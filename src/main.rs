@@ -343,6 +343,8 @@ fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, Str
     // (line, column, char, width); a '\n' with line usize::MAX separates lines that are not joined
     let mut cs: Vec<(usize, usize, char, usize)> = vec![];
     let mut from = 0;
+    // the line before: its code gutter, where its text starts, and whether it is a wrapped part
+    let mut pg: Option<(String, usize, bool)> = None;
     let mut nx = if a < b { cols(&bl[a]) } else { vec![] };
     for k in a..b {
         let cur = std::mem::take(&mut nx);
@@ -353,6 +355,16 @@ fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, Str
                 .map(|c| (k, c.0, c.1, c.2)),
         );
         from = 0;
+        // a wrapped part of a code line sits behind the same gutter, two columns further in
+        // than the line it belongs to (or as far as the wrapped part before it)
+        let (gk, ek) = gutter(&cur);
+        let wrapped = |w: bool, g: &str, e: usize, gn: &str, en: usize| {
+            !g.is_empty() && g == gn && (en == e + 2 || (w && en == e))
+        };
+        let wk = pg
+            .take()
+            .is_some_and(|(g, e, w)| wrapped(w, &g, e, &gk, ek));
+        pg = Some((gk.clone(), ek, wk));
         if k + 1 < b {
             nx = cols(&bl[k + 1]);
             if let Some(&(lx, lc, lw)) = cur.last() {
@@ -376,6 +388,13 @@ fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, Str
                             .all(|c| c.1.is_whitespace())
                     {
                         from = p;
+                        continue;
+                    }
+                    // a code block line: the word is all the text behind the `|` gutter and
+                    // goes on in the next line, a wrapped part of the same code line
+                    let (gn, en) = gutter(&nx);
+                    if p == ek && en < usize::MAX && wrapped(wk, &gk, ek, &gn, en) {
+                        from = en;
                         continue;
                     }
                 }
@@ -432,6 +451,18 @@ fn links(bl: &[Line], a: usize, b: usize, w: usize) -> Vec<(usize, u16, u16, Str
         i = j.max(i + 1);
     }
     o
+}
+
+/// The gutter of a line: its leading spaces and `|` / `│` bars, as (the gutter without its
+/// trailing spaces, the column where the text after it starts or usize::MAX when none).
+fn gutter(l: &[(usize, char, usize)]) -> (String, usize) {
+    let g: Vec<&(usize, char, usize)> = l
+        .iter()
+        .take_while(|c| c.1.is_whitespace() || matches!(c.1, '|' | '│'))
+        .collect();
+    let s: String = g.iter().map(|c| c.1).collect();
+    let end = l.get(g.len()).map(|c| c.0).unwrap_or(usize::MAX);
+    (s.trim_end().to_string(), end)
 }
 
 /// One link piece per line that chars i..e of `cs` run over, each with the full target.
@@ -2701,6 +2732,25 @@ mod tests {
         // the window can start in the middle of the link
         let l2 = links(&bl, 2, bl.len(), 30);
         assert!(l2.iter().all(|x| x.3 != u));
+    }
+
+    #[test]
+    fn link_in_wrapped_code_block_opens_whole() {
+        let u = "https://example.com/a/very/long/path/that/keeps/going/until/it/wraps/index.html";
+        for w in [30, 41, 60, 80] {
+            let bl = noname::md(&format!("```\ncurl -L {u} -o out.html\n```"), w, &mdt());
+            let l = links(&bl, 0, bl.len(), w);
+            assert!(!l.is_empty(), "w={w} {l:?}");
+            assert!(l.iter().all(|x| x.3 == u), "w={w} {l:?}");
+            // the indented code keeps its indent on the wrapped parts too
+            let bl = noname::md(&format!("```\n    x {u}\n```"), w, &mdt());
+            let l = links(&bl, 0, bl.len(), w);
+            assert!(!l.is_empty() && l.iter().all(|x| x.3 == u), "w={w} {l:?}");
+        }
+        // two code lines that only happen to fill the width are not joined
+        let bl = noname::md("```\nhttps://a.example/xx\nyyyy\n```", 24, &mdt());
+        let l = links(&bl, 0, bl.len(), 24);
+        assert!(l.iter().all(|x| x.3 == "https://a.example/xx"), "{l:?}");
     }
 
     #[test]
