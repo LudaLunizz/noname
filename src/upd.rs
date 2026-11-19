@@ -166,6 +166,9 @@ fn run(force: bool) -> Up {
     if let Some(m) = managed() {
         return Up::Skip(format!("updates come from {m}"));
     }
+    if replaced() {
+        return Up::Skip("noname was replaced on disk, restart to use it".into());
+    }
     if CHANNEL == "release" {
         return release();
     }
@@ -243,6 +246,17 @@ fn run(force: bool) -> Up {
         return Up::Fail(format!("install failed: {e}"));
     }
     Up::Ready(remote.chars().take(7).collect())
+}
+
+/// Whether the running binary was replaced or deleted on disk since it started (another
+/// noname updated it, or it was installed again). Linux then names it `... (deleted)`,
+/// and swapping a new build in there would only leave a stray file of that name.
+fn replaced() -> bool {
+    std::env::current_exe().is_ok_and(|p| gone(&p))
+}
+
+fn gone(p: &Path) -> bool {
+    p.to_string_lossy().ends_with(" (deleted)") && !p.exists()
 }
 
 fn swap(nb: &Path, me: &Path) -> std::io::Result<()> {
@@ -405,5 +419,18 @@ mod tests {
             hex(&Sha256::digest(b"abc")),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn a_replaced_binary_is_seen() {
+        let d = std::env::temp_dir().join(format!("nn-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(gone(&d.join("noname (deleted)")));
+        // a real file of that name, and a plain path, are not
+        std::fs::write(d.join("x (deleted)"), "").unwrap();
+        assert!(!gone(&d.join("x (deleted)")));
+        assert!(!gone(&d.join("noname")));
+        assert!(!replaced());
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }
