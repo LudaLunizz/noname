@@ -81,6 +81,7 @@ pub(crate) fn work_token() -> Option<String> {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn tokenv_pub(c: &mut Command) {
     tokenv(c)
 }
@@ -597,6 +598,7 @@ fn mk(name: &str, i: &Value) -> Tool {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn pdir_pub(cwd: &str) -> String {
     pdir(cwd)
 }

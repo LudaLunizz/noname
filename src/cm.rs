@@ -1,3 +1,5 @@
+#![cfg_attr(windows, allow(dead_code))]
+
 use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
