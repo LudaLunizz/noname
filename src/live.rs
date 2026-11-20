@@ -29,6 +29,23 @@ pub(crate) struct Lv {
     c0: f64,
     w0: f32,
     pub cmds: Vec<(String, String)>,
+    cms: Vec<Cmr>,
+}
+
+struct Cmr {
+    rid: String,
+    mid: Value,
+    run: crate::cm::Run,
+    tid: String,
+}
+
+fn init() -> Value {
+    let mut v = json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true});
+    if cfg!(unix) {
+        v["sdkMcpServers"] = json!([crate::cm::SRV]);
+        v["sdkMcpServerConfigs"] = json!({crate::cm::SRV: {"timeout": 7_200_000}});
+    }
+    v
 }
 
 static KIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
@@ -62,6 +79,10 @@ pub(crate) fn work_token() -> Option<String> {
     } else {
         None
     }
+}
+
+pub(crate) fn tokenv_pub(c: &mut Command) {
+    tokenv(c)
 }
 
 fn tokenv(c: &mut Command) {
@@ -428,6 +449,16 @@ impl App {
     pub(crate) fn tstop(&mut self, i: usize) {
         let Some(t) = self.tasks.get(i) else { return };
         let (id, d) = (t.id.clone(), t.desc.clone());
+        if t.kind == 4 {
+            if t.st == 0 {
+                self.cmend(&id, "stopped by the user".into(), true);
+                if let Some(t) = self.tasks.get_mut(i) {
+                    t.st = 3;
+                }
+                self.toast(format!("stopping  {}", one(&d, 30)));
+            }
+            return;
+        }
         if self.lv.is_none() {
             if let Some(t) = self.tasks.get_mut(i) {
                 t.st = 3;
@@ -466,6 +497,7 @@ fn mk(name: &str, i: &Value) -> Tool {
         "Grep" | "Glob" | "LSP" => (Tk::Grep, name.to_lowercase()),
         "WebSearch" | "WebFetch" => (Tk::Web, "web".into()),
         "Task" | "Agent" | "Workflow" => (Tk::Task, "agent".into()),
+        "mcp__noname__code_agent" => (Tk::Task, "code agent".into()),
         n if n.starts_with("mcp__") => {
             let p: Vec<&str> = n.split("__").collect();
             (
@@ -504,6 +536,7 @@ fn mk(name: &str, i: &Value) -> Tool {
         }
         "Skill" => sv(i, "skill"),
         "TodoWrite" => "todos".into(),
+        "mcp__noname__code_agent" => one(&sv(i, "task"), 140),
         _ => {
             let s = i.to_string();
             if s == "{}" || s == "null" {
@@ -562,6 +595,10 @@ fn mk(name: &str, i: &Value) -> Tool {
         t0: 0,
         t1: 0,
     }
+}
+
+pub(crate) fn pdir_pub(cwd: &str) -> String {
+    pdir(cwd)
 }
 
 fn pdir(cwd: &str) -> String {
@@ -678,10 +715,11 @@ impl App {
             c0: 0.0,
             w0: 0.0,
             cmds: vec![],
+            cms: vec![],
         });
         a.ctrl(
             "init",
-            json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}),
+            init(),
         );
         let ar = a.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
@@ -1205,6 +1243,162 @@ impl App {
         for e in bev {
             self.bev(e);
         }
+        self.cmpoll();
+    }
+
+    fn mres(&mut self, rid: &str, m: Value) {
+        self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {"mcp_response": m}}}));
+    }
+
+    fn mcp(&mut self, e: &Value) {
+        let rid = sv(e, "request_id");
+        let r = &e["request"];
+        let m = &r["message"];
+        let mid = m.get("id").cloned().unwrap_or(json!(0));
+        let ok = |v: Value| json!({"jsonrpc": "2.0", "id": mid.clone(), "result": v});
+        if sv(r, "server_name") != crate::cm::SRV {
+            self.mres(&rid, json!({"jsonrpc": "2.0", "id": mid.clone(), "error": {"code": -32601, "message": "unknown server"}}));
+            return;
+        }
+        match sv(m, "method").as_str() {
+            "initialize" => {
+                let pv = m["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18").to_string();
+                self.mres(&rid, ok(json!({"protocolVersion": pv, "capabilities": {"tools": {}}, "serverInfo": {"name": crate::cm::SRV, "version": env!("CARGO_PKG_VERSION")}})));
+            }
+            "tools/list" => self.mres(&rid, ok(json!({"tools": crate::cm::tools()}))),
+            "tools/call" => self.cmcall(rid, mid, &m["params"]),
+            "notifications/cancelled" => {
+                let q = m["params"]["requestId"].clone();
+                let gone: Vec<String> = self
+                    .lv
+                    .as_ref()
+                    .map(|l| l.cms.iter().filter(|c| c.mid == q).map(|c| c.tid.clone()).collect())
+                    .unwrap_or_default();
+                if let Some(l) = &mut self.lv {
+                    l.cms.retain(|c| c.mid != q);
+                }
+                let now = self.t.max(1);
+                for t in self.tasks.iter_mut().filter(|t| gone.contains(&t.id)) {
+                    t.st = 3;
+                    t.t1 = now;
+                }
+                self.mres(&rid, json!({"jsonrpc": "2.0", "id": 0, "result": {}}));
+            }
+            x if x.starts_with("notifications/") => self.mres(&rid, json!({"jsonrpc": "2.0", "id": 0, "result": {}})),
+            _ => self.mres(&rid, json!({"jsonrpc": "2.0", "id": mid.clone(), "error": {"code": -32601, "message": "method not found"}})),
+        }
+    }
+
+    fn cmcall(&mut self, rid: String, mid: Value, p: &Value) {
+        let fail = |t: String| json!({"jsonrpc": "2.0", "id": mid.clone(), "result": {"content": [{"type": "text", "text": t}], "isError": true}});
+        if sv(p, "name") != crate::cm::TOOL {
+            self.mres(&rid, fail(format!("unknown tool {}", sv(p, "name"))));
+            return;
+        }
+        let task = sv(&p["arguments"], "task");
+        if task.trim().is_empty() {
+            self.mres(&rid, fail("task is empty".into()));
+            return;
+        }
+        let model = sv(&p["arguments"], "model");
+        let mode = match self.mode {
+            2 => "auto",
+            3 => "bypassPermissions",
+            _ => "default",
+        };
+        let cwd = std::env::current_dir()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".into());
+        let run = match crate::cm::Run::start(&task, Some(model.as_str()), mode, &cwd) {
+            Ok(r) => r,
+            Err(e) => {
+                self.mres(&rid, fail(format!("could not start the code agent: {e}")));
+                return;
+            }
+        };
+        let used: Vec<String> = self
+            .tasks
+            .iter()
+            .filter(|t| t.kind == 4)
+            .map(|t| t.tool.clone())
+            .collect();
+        let tu = self
+            .lv
+            .as_ref()
+            .and_then(|l| {
+                l.tm.iter()
+                    .filter(|(k, i)| {
+                        !used.contains(k)
+                            && matches!(self.bs.get(**i), Some(B::Tl(t)) if t.nm == "code agent" && t.st == St::Run)
+                    })
+                    .max_by_key(|(_, i)| **i)
+                    .map(|(k, _)| k.clone())
+            })
+            .unwrap_or_default();
+        let tid = format!("cm-{rid}");
+        self.tasks.push(Task {
+            id: tid.clone(),
+            kind: 4,
+            desc: one(&task, 200),
+            t0: self.t.max(1),
+            tool: tu,
+            ..Default::default()
+        });
+        if let Some(l) = &mut self.lv {
+            l.cms.push(Cmr { rid, mid, run, tid });
+        }
+    }
+
+    fn cmpoll(&mut self) {
+        let mut evs = vec![];
+        if let Some(l) = &mut self.lv {
+            for c in &mut l.cms {
+                for e in c.run.poll() {
+                    evs.push((c.tid.clone(), c.run.tools, e));
+                }
+            }
+        }
+        for (tid, n, e) in evs {
+            let tu = self.tasks.iter().find(|t| t.id == tid).map(|t| t.tool.clone()).unwrap_or_default();
+            if let Some(t) = self.tasks.iter_mut().find(|t| t.id == tid) {
+                t.tools = n;
+            }
+            match e {
+                crate::cm::Ev::Act(a) => {
+                    if tu.is_empty() {
+                        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == tid) {
+                            t.acts.push(one(&a, 200));
+                            if t.acts.len() > 50 {
+                                t.acts.remove(0);
+                            }
+                            t.last = one(&a, 200);
+                        }
+                    } else {
+                        self.subact(&tu, a);
+                    }
+                }
+                crate::cm::Ev::Done(x) => self.cmend(&tid, x, false),
+                crate::cm::Ev::Fail(x) => self.cmend(&tid, x, true),
+            }
+        }
+    }
+
+    fn cmend(&mut self, tid: &str, x: String, err: bool) {
+        let Some(c) = self.lv.as_mut().and_then(|l| {
+            let i = l.cms.iter().position(|c| c.tid == tid)?;
+            Some(l.cms.remove(i))
+        }) else {
+            return;
+        };
+        let now = self.t.max(1);
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == tid) {
+            t.st = if err { 2 } else { 1 };
+            t.t1 = now;
+            t.last = one(x.lines().next().unwrap_or(""), 200);
+            t.out = x.clone();
+        }
+        let m = json!({"jsonrpc": "2.0", "id": c.mid, "result": {"content": [{"type": "text", "text": x}], "isError": err}});
+        self.mres(&c.rid, m);
     }
 
     fn bev(&mut self, e: Value) {
@@ -1552,7 +1746,9 @@ impl App {
             }
             "control_request" => {
                 let r = &e["request"];
-                if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "AskUserQuestion" {
+                if r["subtype"] == "mcp_message" {
+                    self.mcp(&e);
+                } else if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "AskUserQuestion" {
                     let qs: Vec<Qq> = r["input"]["questions"]
                         .as_array()
                         .cloned()
@@ -2125,6 +2321,7 @@ impl App {
             c0,
             w0: -1.0,
             cmds,
+            cms: vec![],
         });
         self.bs.truncate(i);
         self.ask = None;
@@ -2134,7 +2331,7 @@ impl App {
         self.cur = self.inp.chars().count();
         self.ctrl(
             "init",
-            json!({"subtype": "initialize", "hooks": null, "perTaskStopAffordance": true}),
+            init(),
         );
         self.toast("rewound");
     }

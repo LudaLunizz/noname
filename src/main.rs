@@ -1636,7 +1636,7 @@ impl V for V1 {
                     } else {
                         format!("{m}   {sx}")
                     };
-                    let dw = w.saturating_sub(rt.chars().count() + 16);
+                    let dw = w.saturating_sub(rt.chars().count() + 18);
                     let d: String = if t.desc.chars().count() > dw {
                         t.desc
                             .chars()
@@ -1655,7 +1655,7 @@ impl V for V1 {
                     } else {
                         l.push(Span::styled(sym, st(if t.st == 2 { RD() } else { FA() })));
                     }
-                    l.push(Span::styled(format!(" {kn:<9}"), st(MU())));
+                    l.push(Span::styled(format!(" {kn:<11}"), st(MU())));
                     l.push(Span::styled(d, if on { st(WH()).bold() } else { st(FG()) }));
                     let mut rr = vec![];
                     if !m.is_empty() {
@@ -2306,7 +2306,7 @@ impl V for V1 {
         if !mid.is_empty() && !by_eff {
             rows[1][1].push(Ch::S(mid.clone()));
         }
-        let run: Vec<usize> = (0..4)
+        let run: Vec<usize> = (0..TKIND.len())
             .map(|k| {
                 a.tasks
                     .iter()
@@ -2598,11 +2598,11 @@ fn agents(bt: &mut Vec<Line<'static>>, a: &App, w: usize) {
         } else {
             format!("{}   {sx}", m.join(" · "))
         };
-        let d = cut(&t.desc, w.saturating_sub(rt.chars().count() + 16));
+        let d = cut(&t.desc, w.saturating_sub(rt.chars().count() + 18));
         let l = vec![
             pad(2),
             dot,
-            Span::styled(format!(" {kn:<9}"), st(tcol(t.kind))),
+            Span::styled(format!(" {kn:<11}"), st(tcol(t.kind))),
             Span::styled(d, st(FG())),
         ];
         let mut rr = vec![];

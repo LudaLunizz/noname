@@ -5,6 +5,7 @@
 
 mod agy;
 pub mod bg;
+mod cm;
 mod codex;
 pub mod free;
 pub mod img;
@@ -738,7 +739,7 @@ pub struct Pk {
 pub struct Task {
     /// Task id.
     pub id: String,
-    /// Kind: 0 shell, 1 monitor, 2 agent, 3 workflow; an index into `TKIND`.
+    /// Kind: 0 shell, 1 monitor, 2 agent, 3 workflow, 4 code agent; an index into `TKIND`.
     pub kind: u8,
     /// Description.
     pub desc: String,
@@ -770,15 +771,16 @@ pub struct Task {
 
 /// Colour of each task kind in the footer and the list under the prompt.
 pub fn tcol(k: u8) -> ratatui::style::Color {
-    [pal::CY(), pal::GR(), pal::LI(), pal::PK()][k.min(3) as usize]
+    [pal::CY(), pal::GR(), pal::LI(), pal::PK(), pal::LI()][k.min(4) as usize]
 }
 
 /// Task kinds as (symbol, singular name, plural name), indexed by `Task::kind`.
-pub const TKIND: [(&str, &str, &str); 4] = [
+pub const TKIND: [(&str, &str, &str); 5] = [
     ("$", "shell", "shells"),
     ("~", "monitor", "monitors"),
     ("&", "agent", "agents"),
     ("%", "workflow", "workflows"),
+    ("{", "code agent", "code agents"),
 ];
 
 fn tl(k: Tk, a: &str, sum: &str, body: Vec<Ln>) -> Tool {
