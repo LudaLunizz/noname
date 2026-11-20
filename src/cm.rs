@@ -81,10 +81,19 @@ fn short(s: &str, n: usize) -> String {
 }
 
 fn act(name: &str, i: &Value) -> String {
-    let a = ["command", "file_path", "pattern", "path", "url", "query", "description", "prompt"]
-        .iter()
-        .find_map(|k| i[*k].as_str())
-        .unwrap_or("");
+    let a = [
+        "command",
+        "file_path",
+        "pattern",
+        "path",
+        "url",
+        "query",
+        "description",
+        "prompt",
+    ]
+    .iter()
+    .find_map(|k| i[*k].as_str())
+    .unwrap_or("");
     if a.is_empty() {
         name.to_string()
     } else {
@@ -131,7 +140,8 @@ impl Run {
         use std::sync::{Arc, Mutex};
 
         let id = uuid();
-        let dir = std::env::temp_dir().join(format!("noname-cm-{}-{}", std::process::id(), &id[..8]));
+        let dir =
+            std::env::temp_dir().join(format!("noname-cm-{}-{}", std::process::id(), &id[..8]));
         std::fs::create_dir_all(&dir)?;
         let sig = dir.join("stop");
         let hk = format!("touch '{}'", sig.to_string_lossy().replace('\'', "'\\''"));
@@ -228,28 +238,39 @@ impl Run {
     }
 
     fn read(&mut self, out: &mut Vec<Ev>) {
-        let Ok(b) = std::fs::read(&self.tr) else { return };
+        let Ok(b) = std::fs::read(&self.tr) else {
+            return;
+        };
         if b.len() <= self.pos {
             return;
         }
         self.part.push_str(&String::from_utf8_lossy(&b[self.pos..]));
         self.pos = b.len();
-        let Some(cut) = self.part.rfind('\n') else { return };
+        let Some(cut) = self.part.rfind('\n') else {
+            return;
+        };
         let done: String = self.part[..=cut].to_string();
         self.part = self.part[cut + 1..].to_string();
         for l in done.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(l) else {
+                continue;
+            };
             if v["type"] != "assistant" {
                 continue;
             }
-            let Some(cs) = v["message"]["content"].as_array() else { continue };
+            let Some(cs) = v["message"]["content"].as_array() else {
+                continue;
+            };
             let mut t = String::new();
             for c in cs {
                 match c["type"].as_str().unwrap_or("") {
                     "text" => t.push_str(c["text"].as_str().unwrap_or("")),
                     "tool_use" => {
                         self.tools += 1;
-                        out.push(Ev::Act(act(c["name"].as_str().unwrap_or("tool"), &c["input"])));
+                        out.push(Ev::Act(act(
+                            c["name"].as_str().unwrap_or("tool"),
+                            &c["input"],
+                        )));
                     }
                     _ => {}
                 }
@@ -271,7 +292,11 @@ impl Run {
     #[cfg(unix)]
     fn tail(&self) -> String {
         let s = self.screen();
-        let v: Vec<&str> = s.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+        let v: Vec<&str> = s
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty())
+            .collect();
         v[v.len().saturating_sub(12)..].join("\n")
     }
 
@@ -303,9 +328,13 @@ impl Run {
             }
             let f = |m: &str| Some(Ev::Fail(m.to_string()));
             let bad = if sc.contains("Yes, turn on Code Mode") {
-                f("Code Mode is not confirmed yet. Run `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 claude` once in a terminal and choose \"Yes, turn on Code Mode\".")
+                f(
+                    "Code Mode is not confirmed yet. Run `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 claude` once in a terminal and choose \"Yes, turn on Code Mode\".",
+                )
             } else if sc.contains("trust this folder") {
-                f("This folder is not trusted for interactive Claude Code yet. Run `claude` here once and trust the folder.")
+                f(
+                    "This folder is not trusted for interactive Claude Code yet. Run `claude` here once and trust the folder.",
+                )
             } else if sc.contains("Do you want to") {
                 f(&format!(
                     "The code agent stopped at a permission prompt. Use auto or bypass permission mode for code agents.\n\n{}",

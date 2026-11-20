@@ -717,10 +717,7 @@ impl App {
             cmds: vec![],
             cms: vec![],
         });
-        a.ctrl(
-            "init",
-            init(),
-        );
+        a.ctrl("init", init());
         let ar = a.lv.as_ref().map(|l| l.args.clone()).unwrap_or_default();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
         let rid = if let Some(i) = ar.iter().position(|x| x == "-r" || x == "--resume") {
@@ -1359,7 +1356,12 @@ impl App {
             }
         }
         for (tid, n, e) in evs {
-            let tu = self.tasks.iter().find(|t| t.id == tid).map(|t| t.tool.clone()).unwrap_or_default();
+            let tu = self
+                .tasks
+                .iter()
+                .find(|t| t.id == tid)
+                .map(|t| t.tool.clone())
+                .unwrap_or_default();
             if let Some(t) = self.tasks.iter_mut().find(|t| t.id == tid) {
                 t.tools = n;
             }
@@ -1748,7 +1750,8 @@ impl App {
                 let r = &e["request"];
                 if r["subtype"] == "mcp_message" {
                     self.mcp(&e);
-                } else if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "AskUserQuestion" {
+                } else if r["subtype"] == "can_use_tool" && sv(r, "tool_name") == "AskUserQuestion"
+                {
                     let qs: Vec<Qq> = r["input"]["questions"]
                         .as_array()
                         .cloned()
@@ -2329,10 +2332,7 @@ impl App {
         self.busy = false;
         self.inp = txt;
         self.cur = self.inp.chars().count();
-        self.ctrl(
-            "init",
-            init(),
-        );
+        self.ctrl("init", init());
         self.toast("rewound");
     }
 
